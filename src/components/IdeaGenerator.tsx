@@ -1,11 +1,33 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info } from 'lucide-react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter } from '../types';
 import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER } from '../types';
 import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET } from '../services/universe';
 import { scanForIdeas } from '../services/scanner';
 import { generateTheses } from '../services/claude';
+import { calcAnnualizedYield } from '../scoring/engine';
 import IdeaCard from './IdeaCard';
+
+type SortKey = 'score' | 'ticker' | 'type' | 'strike' | 'price' | 'yield' | 'delta' | 'psafe' | 'dte' | 'ivr' | 'confidence';
+
+const CONFIDENCE_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
+
+function compareIdeas(a: InvestmentIdea, b: InvestmentIdea, key: SortKey): number {
+  switch (key) {
+    case 'score':      return a.score.compositeScore - b.score.compositeScore;
+    case 'ticker':     return a.position.ticker.localeCompare(b.position.ticker);
+    case 'type':       return a.position.strategy.localeCompare(b.position.strategy);
+    case 'strike':     return a.position.strikePrice - b.position.strikePrice;
+    case 'price':      return a.position.currentPrice - b.position.currentPrice;
+    case 'yield':      return calcAnnualizedYield(a.position) - calcAnnualizedYield(b.position);
+    case 'delta':      return Math.abs(a.position.delta) - Math.abs(b.position.delta);
+    case 'psafe':      return (1 - Math.abs(a.position.delta)) - (1 - Math.abs(b.position.delta));
+    case 'dte':        return a.position.dte - b.position.dte;
+    case 'ivr':        return a.position.ivRank - b.position.ivRank;
+    case 'confidence': return (CONFIDENCE_RANK[a.thesis.confidence] || 0) - (CONFIDENCE_RANK[b.thesis.confidence] || 0);
+    default: return 0;
+  }
+}
 
 interface Props {
   apiConfig: APIConfig;
@@ -32,6 +54,26 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   const [error, setError] = useState('');
   const [watchlistState, setWatchlistState] = useState<string[]>(() => getWatchlist());
   const [excludedState, setExcludedState] = useState<string[]>(() => getExcluded());
+  const [sortKey, setSortKey] = useState<SortKey>('score');
+  const [sortAsc, setSortAsc] = useState(false);
+
+  const sortedIdeas = useMemo(() => {
+    const copy = [...ideas];
+    copy.sort((a, b) => {
+      const cmp = compareIdeas(a, b, sortKey);
+      return sortAsc ? cmp : -cmp;
+    });
+    return copy;
+  }, [ideas, sortKey, sortAsc]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortAsc(!sortAsc);
+    } else {
+      setSortKey(key);
+      setSortAsc(false);
+    }
+  };
   const [scanFilter, setScanFilter] = useState<ScanFilter>(() => loadScanFilter());
 
   useEffect(() => {
@@ -373,22 +415,22 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 <tr>
                   <th className="px-2 py-2 text-right">#</th>
                   <th></th>
-                  <th className="px-2 py-2 text-center">Score</th>
-                  <th className="px-2 py-2 text-left">Ticker</th>
-                  <th className="px-2 py-2 text-center">Type</th>
-                  <th className="px-2 py-2 text-right">Strike</th>
-                  <th className="px-2 py-2 text-right">Price</th>
-                  <th className="px-2 py-2 text-right">Yield</th>
-                  <th className="px-2 py-2 text-right" title="Absolute delta — lower = safer">Delta</th>
-                  <th className="px-2 py-2 text-right" title="Probability option expires OTM (not assigned)">P(Safe)</th>
-                  <th className="px-2 py-2 text-right">DTE</th>
-                  <th className="px-2 py-2 text-right">IVR</th>
-                  <th className="px-2 py-2 text-center">Conf.</th>
+                  <SortableTh sortKey="score" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Score</SortableTh>
+                  <SortableTh sortKey="ticker" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="left">Ticker</SortableTh>
+                  <SortableTh sortKey="type" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Type</SortableTh>
+                  <SortableTh sortKey="strike" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Strike</SortableTh>
+                  <SortableTh sortKey="price" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Price</SortableTh>
+                  <SortableTh sortKey="yield" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Yield</SortableTh>
+                  <SortableTh sortKey="delta" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Absolute delta — lower = safer">Delta</SortableTh>
+                  <SortableTh sortKey="psafe" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Probability option expires OTM (not assigned)">P(Safe)</SortableTh>
+                  <SortableTh sortKey="dte" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">DTE</SortableTh>
+                  <SortableTh sortKey="ivr" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">IVR</SortableTh>
+                  <SortableTh sortKey="confidence" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Conf.</SortableTh>
                   <th className="px-2 py-2 text-left">Summary</th>
                 </tr>
               </thead>
               <tbody>
-                {ideas.map((idea, i) => (
+                {sortedIdeas.map((idea, i) => (
                   <IdeaCard
                     key={idea.id}
                     idea={idea}
@@ -421,5 +463,35 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
         </div>
       )}
     </div>
+  );
+}
+
+interface SortableThProps {
+  sortKey: SortKey;
+  currentKey: SortKey;
+  asc: boolean;
+  onSort: (key: SortKey) => void;
+  align: 'left' | 'center' | 'right';
+  title?: string;
+  children: React.ReactNode;
+}
+
+function SortableTh({ sortKey, currentKey, asc, onSort, align, title, children }: SortableThProps) {
+  const isActive = sortKey === currentKey;
+  const Icon = !isActive ? ArrowUpDown : asc ? ArrowUp : ArrowDown;
+  const alignClass = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start';
+  const thAlign = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
+
+  return (
+    <th
+      className={`px-2 py-2 ${thAlign} cursor-pointer select-none hover:text-white transition-colors ${isActive ? 'text-emerald-400' : ''}`}
+      onClick={() => onSort(sortKey)}
+      title={title}
+    >
+      <span className={`inline-flex items-center gap-1 ${alignClass}`}>
+        {children}
+        <Icon className="h-3 w-3" />
+      </span>
+    </th>
   );
 }
