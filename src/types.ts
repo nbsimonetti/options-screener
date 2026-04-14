@@ -90,10 +90,12 @@ export const WEIGHT_PRESETS: WeightPreset[] = [
 // --- Configuration ---
 
 export interface APIConfig {
+  marketDataToken: string;
   claudeApiKey: string;
 }
 
 export const DEFAULT_API_CONFIG: APIConfig = {
+  marketDataToken: '',
   claudeApiKey: '',
 };
 

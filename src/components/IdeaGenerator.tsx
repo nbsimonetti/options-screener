@@ -32,9 +32,9 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
     setExpandedId(null);
 
     try {
-      // Phase 1: Scan tickers (Yahoo Finance — no API key needed)
+      // Phase 1: Scan tickers via MarketData.app
       setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting scan...' });
-      const candidates = await scanForIdeas(universe, weights, setProgress);
+      const candidates = await scanForIdeas(universe, weights, setProgress, apiConfig.marketDataToken || undefined);
 
       if (candidates.length === 0) {
         setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.' });

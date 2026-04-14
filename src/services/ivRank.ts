@@ -1,4 +1,4 @@
-import type { YahooOption } from './yahoo';
+import type { MDOption } from './marketdata';
 
 const IV_CACHE_KEY = 'options-screener-iv-cache';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -35,26 +35,23 @@ export function setCachedIVRank(ticker: string, ivRank: number) {
 }
 
 export function estimateIVRankFromChain(
-  calls: YahooOption[],
-  puts: YahooOption[],
+  chain: MDOption[],
   currentPrice: number,
 ): number {
-  // Collect all IV values from the chain
-  const allOptions = [...calls, ...puts];
-  const ivValues = allOptions
-    .map((o) => o.impliedVolatility)
+  const ivValues = chain
+    .map((o) => o.iv)
     .filter((v): v is number => v != null && v > 0);
 
   if (ivValues.length === 0) return 50;
 
-  // Find ATM option (nearest to current price)
+  // Find ATM option IV
   let atmIV = 0;
   let minDist = Infinity;
-  for (const opt of allOptions) {
+  for (const opt of chain) {
     const dist = Math.abs(opt.strike - currentPrice);
-    if (dist < minDist && opt.impliedVolatility > 0) {
+    if (dist < minDist && opt.iv > 0) {
       minDist = dist;
-      atmIV = opt.impliedVolatility;
+      atmIV = opt.iv;
     }
   }
 

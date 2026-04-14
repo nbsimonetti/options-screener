@@ -1,100 +1,77 @@
 import { useState, useCallback } from 'react';
 import { Search, Loader2, Plus, Filter } from 'lucide-react';
-import type { OptionPosition, ChainFilter, StrategyType } from '../types';
+import type { APIConfig, OptionPosition, ChainFilter, StrategyType } from '../types';
 import { DEFAULT_CHAIN_FILTER } from '../types';
-import { getOptionChain, epochToISO, earningsDateFromQuote } from '../services/yahoo';
-import type { YahooQuote, YahooOption, YahooChainResult } from '../services/yahoo';
+import { getQuote, getOptionChain } from '../services/marketdata';
+import type { MDQuote, MDOption } from '../services/marketdata';
 import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from '../services/ivRank';
-import { filterYahooChain, yahooChainToPositions } from '../services/adapter';
-import { computeGreeks } from '../services/greeks';
+import { filterMDChain, mdChainToPositions } from '../services/adapter';
 import { formatCurrency, formatPercent, formatDelta } from '../utils/formatting';
 
 interface Props {
+  apiConfig: APIConfig;
   onImport: (positions: OptionPosition[]) => void;
 }
 
-export default function TickerLookup({ onImport }: Props) {
+export default function TickerLookup({ apiConfig, onImport }: Props) {
   const [ticker, setTicker] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [quote, setQuote] = useState<YahooQuote | null>(null);
-  const [expirations, setExpirations] = useState<number[]>([]);
-  const [selectedExp, setSelectedExp] = useState<number>(0);
-  const [allCalls, setAllCalls] = useState<YahooOption[]>([]);
-  const [allPuts, setAllPuts] = useState<YahooOption[]>([]);
-  const [filteredChain, setFilteredChain] = useState<YahooOption[]>([]);
+  const [quote, setQuote] = useState<MDQuote | null>(null);
+  const [chain, setChain] = useState<MDOption[]>([]);
+  const [filteredChain, setFilteredChain] = useState<MDOption[]>([]);
   const [filter, setFilter] = useState<ChainFilter>(DEFAULT_CHAIN_FILTER);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
   const [ivRank, setIvRank] = useState(50);
-  const [marketStatus, setMarketStatus] = useState('');
+  const [chainExpiration, setChainExpiration] = useState('');
+
+  const token = apiConfig.marketDataToken || undefined;
 
   const searchTicker = useCallback(async () => {
     if (!ticker) return;
     setLoading(true);
     setError('');
-    setAllCalls([]);
-    setAllPuts([]);
+    setChain([]);
     setFilteredChain([]);
     setSelected(new Set());
-    setSelectedExp(0);
 
     try {
-      const result = await getOptionChain(ticker);
-      setQuote(result.quote);
-      setExpirations(result.expirationDates);
-
-      // Market status
-      if (result.quote.marketState !== 'REGULAR') {
-        setMarketStatus('Market closed — showing last available data');
-      } else {
-        setMarketStatus('');
-      }
-
-      // Find best expiration in DTE range
-      const now = Date.now();
-      const targetExp = result.expirationDates.find((epoch) => {
-        const dte = Math.ceil((epoch * 1000 - now) / (1000 * 60 * 60 * 24));
-        return dte >= filter.minDTE && dte <= filter.maxDTE;
-      }) || result.expirationDates[0];
-
-      if (targetExp) {
-        setSelectedExp(targetExp);
-        // If the default loaded chain matches, use it directly
-        const defaultExp = result.calls[0]?.expiration || result.puts[0]?.expiration;
-        if (defaultExp === targetExp) {
-          applyChainData(result, result.quote);
-        } else {
-          await loadChain(targetExp, result.quote);
-        }
-      }
+      const q = await getQuote(ticker, token);
+      setQuote(q);
+      await loadChain(q);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch data');
     } finally {
       setLoading(false);
     }
-  }, [ticker, filter.minDTE, filter.maxDTE]);
+  }, [ticker, token]);
 
-  const applyChainData = (result: YahooChainResult, q: YahooQuote) => {
-    setAllCalls(result.calls);
-    setAllPuts(result.puts);
-    const price = q.regularMarketPrice || q.regularMarketPreviousClose || 0;
-    let rank = getCachedIVRank(ticker);
-    if (rank === null) {
-      rank = estimateIVRankFromChain(result.calls, result.puts, price);
-      setCachedIVRank(ticker, rank);
-    }
-    setIvRank(rank);
-    const filtered = filterYahooChain(result.calls, result.puts, q, filter);
-    setFilteredChain(filtered);
-    setSelected(new Set());
-  };
-
-  const loadChain = async (expEpoch: number, q: YahooQuote) => {
+  const loadChain = async (q: MDQuote) => {
     setLoading(true);
     try {
-      const result = await getOptionChain(ticker, expEpoch);
-      applyChainData(result, q);
+      const side = filter.strategy === 'CSP' ? 'put' as const : 'call' as const;
+      const targetDTE = Math.round((filter.minDTE + filter.maxDTE) / 2);
+      const rawChain = await getOptionChain(ticker, token, { dte: targetDTE, side });
+      setChain(rawChain);
+
+      // Determine the actual expiration from the chain data
+      if (rawChain.length > 0) {
+        const expEpoch = rawChain[0].expiration;
+        setChainExpiration(new Date(expEpoch * 1000).toISOString().split('T')[0]);
+      }
+
+      const price = q.last || q.mid || 0;
+      let rank = getCachedIVRank(ticker);
+      if (rank === null) {
+        rank = estimateIVRankFromChain(rawChain, price);
+        setCachedIVRank(ticker, rank);
+      }
+      setIvRank(rank);
+
+      const filtered = filterMDChain(rawChain, q, filter);
+      setFilteredChain(filtered);
+      setSelected(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load chain');
     } finally {
@@ -102,18 +79,18 @@ export default function TickerLookup({ onImport }: Props) {
     }
   };
 
-  const handleExpChange = (exp: number) => {
-    setSelectedExp(exp);
-    if (quote) loadChain(exp, quote);
-  };
-
   const applyFilter = (newFilter: ChainFilter) => {
     setFilter(newFilter);
-    if (quote && (allCalls.length > 0 || allPuts.length > 0)) {
-      const filtered = filterYahooChain(allCalls, allPuts, quote, newFilter);
+    if (quote && chain.length > 0) {
+      const filtered = filterMDChain(chain, quote, newFilter);
       setFilteredChain(filtered);
       setSelected(new Set());
     }
+  };
+
+  const reloadWithFilter = (newFilter: ChainFilter) => {
+    setFilter(newFilter);
+    if (quote) loadChain(quote);
   };
 
   const toggleRow = (idx: number) => {
@@ -133,7 +110,7 @@ export default function TickerLookup({ onImport }: Props) {
   const addSelected = () => {
     if (!quote || selected.size === 0) return;
     const selectedOptions = filteredChain.filter((_, i) => selected.has(i));
-    const positions = yahooChainToPositions(selectedOptions, quote, filter.strategy, ivRank);
+    const positions = mdChainToPositions(selectedOptions, quote, filter.strategy, ivRank, '');
     onImport(positions);
     setSelected(new Set());
   };
@@ -145,9 +122,9 @@ export default function TickerLookup({ onImport }: Props) {
     <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-3">
       <div className="flex items-center gap-2">
         <h2 className="text-sm font-semibold text-white flex-1">Live Option Lookup</h2>
-        {marketStatus && (
+        {!token && (
           <span className="text-[10px] text-amber-400 bg-amber-900/30 border border-amber-700/50 rounded px-2 py-0.5">
-            {marketStatus}
+            Demo mode (AAPL only) — add free Market Data token for all tickers
           </span>
         )}
       </div>
@@ -157,7 +134,7 @@ export default function TickerLookup({ onImport }: Props) {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <input
             className={`${inputClass} w-full pl-9`}
-            placeholder="Enter ticker (e.g., AAPL)"
+            placeholder={token ? 'Enter ticker (e.g., AAPL, NVDA)' : 'Enter AAPL (demo) or add token for all tickers'}
             value={ticker}
             onChange={(e) => setTicker(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === 'Enter' && searchTicker()}
@@ -184,15 +161,14 @@ export default function TickerLookup({ onImport }: Props) {
       {quote && (
         <div className="flex items-center gap-4 text-xs text-slate-400 bg-slate-900/50 rounded px-3 py-2">
           <span className="text-white font-semibold">{quote.symbol}</span>
-          <span>{quote.shortName || quote.longName}</span>
-          <span className="text-emerald-400 font-mono">{formatCurrency(quote.regularMarketPrice)}</span>
-          {quote.regularMarketChange != null && (
-            <span className={quote.regularMarketChange >= 0 ? 'text-green-400' : 'text-red-400'}>
-              {quote.regularMarketChange >= 0 ? '+' : ''}{formatCurrency(quote.regularMarketChange)} ({formatPercent(quote.regularMarketChangePercent / 100)})
+          <span className="text-emerald-400 font-mono">{formatCurrency(quote.last)}</span>
+          {quote.change != null && (
+            <span className={quote.change >= 0 ? 'text-green-400' : 'text-red-400'}>
+              {quote.change >= 0 ? '+' : ''}{formatCurrency(quote.change)} ({formatPercent(quote.changepct)})
             </span>
           )}
           <span>IV Rank: <span className="text-white font-mono">{ivRank.toFixed(0)}</span></span>
-          {earningsDateFromQuote(quote) && <span>Earnings: <span className="text-white">{earningsDateFromQuote(quote)}</span></span>}
+          {chainExpiration && <span>Exp: <span className="text-white">{chainExpiration}</span></span>}
         </div>
       )}
 
@@ -200,7 +176,7 @@ export default function TickerLookup({ onImport }: Props) {
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 bg-slate-900/50 rounded p-3">
           <div>
             <label className={labelClass}>Strategy</label>
-            <select className={`${inputClass} w-full mt-1`} value={filter.strategy} onChange={(e) => applyFilter({ ...filter, strategy: e.target.value as StrategyType })}>
+            <select className={`${inputClass} w-full mt-1`} value={filter.strategy} onChange={(e) => { const f = { ...filter, strategy: e.target.value as StrategyType }; setFilter(f); if (quote) loadChain(quote); }}>
               <option value="CSP">Cash Secured Put</option>
               <option value="CC">Covered Call</option>
             </select>
@@ -215,28 +191,16 @@ export default function TickerLookup({ onImport }: Props) {
           </div>
           <div>
             <label className={labelClass}>Min DTE</label>
-            <input className={`${inputClass} w-full mt-1`} type="number" value={filter.minDTE} onChange={(e) => applyFilter({ ...filter, minDTE: +e.target.value })} />
+            <input className={`${inputClass} w-full mt-1`} type="number" value={filter.minDTE} onChange={(e) => reloadWithFilter({ ...filter, minDTE: +e.target.value })} />
           </div>
           <div>
             <label className={labelClass}>Max DTE</label>
-            <input className={`${inputClass} w-full mt-1`} type="number" value={filter.maxDTE} onChange={(e) => applyFilter({ ...filter, maxDTE: +e.target.value })} />
+            <input className={`${inputClass} w-full mt-1`} type="number" value={filter.maxDTE} onChange={(e) => reloadWithFilter({ ...filter, maxDTE: +e.target.value })} />
           </div>
           <div>
             <label className={labelClass}>Min OTM %</label>
             <input className={`${inputClass} w-full mt-1`} type="number" step="0.5" value={filter.minOTMPct} onChange={(e) => applyFilter({ ...filter, minOTMPct: +e.target.value })} />
           </div>
-        </div>
-      )}
-
-      {expirations.length > 0 && (
-        <div className="flex items-center gap-2">
-          <span className={labelClass}>Expiration:</span>
-          <select className={`${inputClass} flex-1`} value={selectedExp} onChange={(e) => handleExpChange(+e.target.value)}>
-            {expirations.map((epoch) => {
-              const dte = Math.ceil((epoch * 1000 - Date.now()) / (1000 * 60 * 60 * 24));
-              return <option key={epoch} value={epoch}>{epochToISO(epoch)} ({dte}d)</option>;
-            })}
-          </select>
         </div>
       )}
 
@@ -260,23 +224,19 @@ export default function TickerLookup({ onImport }: Props) {
               </thead>
               <tbody>
                 {filteredChain.map((opt, i) => {
-                  const mid = opt.bid > 0 && opt.ask > 0 ? (opt.bid + opt.ask) / 2 : opt.lastPrice || 0;
-                  const price = quote?.regularMarketPrice || 0;
+                  const price = quote?.last || 0;
                   const otm = filter.strategy === 'CSP'
                     ? ((price - opt.strike) / price) * 100
                     : ((opt.strike - price) / price) * 100;
-                  const dte = Math.ceil((opt.expiration * 1000 - Date.now()) / (1000 * 60 * 60 * 24));
-                  const optType = filter.strategy === 'CSP' ? 'put' as const : 'call' as const;
-                  const greeks = computeGreeks(price, opt.strike, dte, opt.impliedVolatility || 0, optType);
                   return (
-                    <tr key={opt.contractSymbol || i} className={`border-t border-slate-700/50 cursor-pointer transition-colors ${selected.has(i) ? 'bg-emerald-900/20' : 'hover:bg-slate-700/30'}`} onClick={() => toggleRow(i)}>
+                    <tr key={opt.optionSymbol || i} className={`border-t border-slate-700/50 cursor-pointer transition-colors ${selected.has(i) ? 'bg-emerald-900/20' : 'hover:bg-slate-700/30'}`} onClick={() => toggleRow(i)}>
                       <td className="px-2 py-1.5"><input type="checkbox" checked={selected.has(i)} onChange={() => toggleRow(i)} className="accent-emerald-500" /></td>
                       <td className="px-2 py-1.5 text-white font-mono">{formatCurrency(opt.strike)}</td>
                       <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{formatCurrency(opt.bid)}</td>
                       <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{formatCurrency(opt.ask)}</td>
-                      <td className="px-2 py-1.5 text-right text-emerald-400 font-mono">{formatCurrency(mid)}</td>
-                      <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{formatDelta(Math.abs(greeks.delta))}</td>
-                      <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{((opt.impliedVolatility || 0) * 100).toFixed(1)}%</td>
+                      <td className="px-2 py-1.5 text-right text-emerald-400 font-mono">{formatCurrency(opt.mid)}</td>
+                      <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{formatDelta(Math.abs(opt.delta))}</td>
+                      <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{(opt.iv * 100).toFixed(1)}%</td>
                       <td className="px-2 py-1.5 text-right text-slate-400">{(opt.volume || 0).toLocaleString()}</td>
                       <td className="px-2 py-1.5 text-right text-slate-400">{(opt.openInterest || 0).toLocaleString()}</td>
                       <td className="px-2 py-1.5 text-right text-slate-400">{otm.toFixed(1)}%</td>
@@ -295,7 +255,7 @@ export default function TickerLookup({ onImport }: Props) {
         </>
       )}
 
-      {(allCalls.length > 0 || allPuts.length > 0) && filteredChain.length === 0 && !loading && (
+      {chain.length > 0 && filteredChain.length === 0 && !loading && (
         <p className="text-xs text-slate-500 text-center py-4">No contracts match your filters. Try adjusting delta range or DTE.</p>
       )}
     </div>

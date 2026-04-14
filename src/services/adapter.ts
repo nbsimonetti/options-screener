@@ -1,71 +1,55 @@
 import type { OptionPosition, StrategyType, ChainFilter } from '../types';
-import type { YahooOption, YahooQuote } from './yahoo';
-import { earningsDateFromQuote } from './yahoo';
-import { computeGreeks } from './greeks';
+import type { MDOption, MDQuote } from './marketdata';
 
-function calcDTE(expirationEpoch: number): number {
-  const exp = new Date(expirationEpoch * 1000);
-  const now = new Date();
-  return Math.max(0, Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
-}
-
-export function yahooOptionToPosition(
-  opt: YahooOption,
-  quote: YahooQuote,
+export function mdOptionToPosition(
+  opt: MDOption,
+  quote: MDQuote,
   strategy: StrategyType,
   ivRank: number,
+  earningsDate: string,
 ): OptionPosition {
-  const price = quote.regularMarketPrice || quote.regularMarketPreviousClose || 0;
-  const midPrice = opt.bid > 0 && opt.ask > 0 ? (opt.bid + opt.ask) / 2 : opt.lastPrice || 0;
-  const dte = calcDTE(opt.expiration);
-  const iv = opt.impliedVolatility || 0; // Yahoo returns decimal (e.g., 0.35)
-  const optType = strategy === 'CSP' ? 'put' as const : 'call' as const;
-  const greeks = computeGreeks(price, opt.strike, dte, iv, optType);
-
   return {
     id: crypto.randomUUID(),
     ticker: quote.symbol,
     strategy,
-    currentPrice: price,
+    currentPrice: quote.last || quote.mid || 0,
     strikePrice: opt.strike,
-    premium: +midPrice.toFixed(2),
+    premium: +(opt.mid || opt.last || 0).toFixed(2),
     bid: opt.bid || 0,
     ask: opt.ask || 0,
-    dte,
-    delta: Math.abs(greeks.delta),
-    iv: iv * 100,
+    dte: opt.dte,
+    delta: Math.abs(opt.delta || 0),
+    iv: (opt.iv || 0) * 100,
     ivRank,
     volume: opt.volume || 0,
     openInterest: opt.openInterest || 0,
-    nextEarningsDate: earningsDateFromQuote(quote),
+    nextEarningsDate: earningsDate,
     contractSize: 100,
   };
 }
 
-export function filterYahooChain(
-  calls: YahooOption[],
-  puts: YahooOption[],
-  quote: YahooQuote,
+export function filterMDChain(
+  chain: MDOption[],
+  quote: MDQuote,
   filter: ChainFilter,
-): YahooOption[] {
-  const price = quote.regularMarketPrice || quote.regularMarketPreviousClose || 0;
+): MDOption[] {
+  const price = quote.last || quote.mid || 0;
   if (price <= 0) return [];
 
-  const source = filter.strategy === 'CSP' ? puts : calls;
+  return chain.filter((opt) => {
+    // Side filter
+    if (filter.strategy === 'CSP' && opt.side !== 'put') return false;
+    if (filter.strategy === 'CC' && opt.side !== 'call') return false;
 
-  return source.filter((opt) => {
-    const dte = calcDTE(opt.expiration);
-    if (dte < filter.minDTE || dte > filter.maxDTE) return false;
+    // DTE filter
+    if (opt.dte < filter.minDTE || opt.dte > filter.maxDTE) return false;
 
-    // Compute delta for filtering
-    const iv = opt.impliedVolatility || 0;
-    if (iv <= 0) return false;
-    const optType = filter.strategy === 'CSP' ? 'put' as const : 'call' as const;
-    const greeks = computeGreeks(price, opt.strike, dte, iv, optType);
-    const absDelta = Math.abs(greeks.delta);
+    // Delta filter
+    const absDelta = Math.abs(opt.delta || 0);
     if (absDelta < filter.minDelta || absDelta > filter.maxDelta) return false;
 
-    // OTM filter
+    // OTM filter — skip ITM options
+    if (opt.inTheMoney) return false;
     let otmPct: number;
     if (filter.strategy === 'CSP') {
       otmPct = ((price - opt.strike) / price) * 100;
@@ -75,18 +59,19 @@ export function filterYahooChain(
     if (otmPct < filter.minOTMPct) return false;
 
     // Must have some premium
-    const mid = opt.bid > 0 && opt.ask > 0 ? (opt.bid + opt.ask) / 2 : opt.lastPrice || 0;
+    const mid = opt.mid || opt.last || 0;
     if (mid <= 0) return false;
 
     return true;
   });
 }
 
-export function yahooChainToPositions(
-  options: YahooOption[],
-  quote: YahooQuote,
+export function mdChainToPositions(
+  chain: MDOption[],
+  quote: MDQuote,
   strategy: StrategyType,
   ivRank: number,
+  earningsDate: string,
 ): OptionPosition[] {
-  return options.map((opt) => yahooOptionToPosition(opt, quote, strategy, ivRank));
+  return chain.map((opt) => mdOptionToPosition(opt, quote, strategy, ivRank, earningsDate));
 }
