@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { OptionPosition, ScoringWeights, APIConfig } from '../types';
-import { DEFAULT_WEIGHTS, DEFAULT_API_CONFIG, LS_API_CONFIG } from '../types';
+import type { OptionPosition, ScoringWeights, APIConfig, AppView, InvestmentIdea } from '../types';
+import { DEFAULT_WEIGHTS, DEFAULT_API_CONFIG, LS_API_CONFIG, LS_IDEAS } from '../types';
 import Header from './Header';
 import TickerLookup from './TickerLookup';
 import PositionEntry from './PositionEntry';
@@ -10,6 +10,7 @@ import DataSourceConfig from './DataSourceConfig';
 import PositionTable from './PositionTable';
 import PayoffDiagram from './PayoffDiagram';
 import ScoreBreakdown from './ScoreBreakdown';
+import IdeaGenerator from './IdeaGenerator';
 
 const LS_POSITIONS = 'options-screener-positions';
 const LS_WEIGHTS = 'options-screener-weights';
@@ -99,6 +100,7 @@ const SAMPLE_POSITIONS: OptionPosition[] = [
 ];
 
 export default function Dashboard() {
+  const [activeView, setActiveView] = useState<AppView>('screener');
   const [positions, setPositions] = useState<OptionPosition[]>(() =>
     loadFromStorage(LS_POSITIONS, SAMPLE_POSITIONS)
   );
@@ -107,6 +109,9 @@ export default function Dashboard() {
   );
   const [apiConfig, setApiConfig] = useState<APIConfig>(() =>
     loadFromStorage(LS_API_CONFIG, DEFAULT_API_CONFIG)
+  );
+  const [ideas, setIdeas] = useState<InvestmentIdea[]>(() =>
+    loadFromStorage(LS_IDEAS, [])
   );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(positions.map(p => p.id)));
 
@@ -121,6 +126,10 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem(LS_API_CONFIG, JSON.stringify(apiConfig));
   }, [apiConfig]);
+
+  useEffect(() => {
+    localStorage.setItem(LS_IDEAS, JSON.stringify(ideas));
+  }, [ideas]);
 
   const addPosition = useCallback((pos: OptionPosition) => {
     setPositions((prev) => [...prev, pos]);
@@ -146,35 +155,57 @@ export default function Dashboard() {
     });
   }, []);
 
+  const addFromIdeas = useCallback((newPositions: OptionPosition[]) => {
+    importPositions(newPositions);
+    setActiveView('screener');
+  }, [importPositions]);
+
   const selectedPositions = positions.filter((p) => selectedIds.has(p.id));
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-300">
-      <Header />
+      <Header activeView={activeView} onViewChange={setActiveView} />
       <div className="mx-auto max-w-[1400px] p-4 space-y-4">
-        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-          <div className="space-y-4">
-            <TickerLookup apiConfig={apiConfig} onImport={importPositions} />
-            <PositionEntry onAdd={addPosition} />
-            <CSVImport onImport={importPositions} />
-            <PositionTable
-              positions={positions}
+        {activeView === 'screener' ? (
+          <>
+            <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+              <div className="space-y-4">
+                <TickerLookup apiConfig={apiConfig} onImport={importPositions} />
+                <PositionEntry onAdd={addPosition} />
+                <CSVImport onImport={importPositions} />
+                <PositionTable
+                  positions={positions}
+                  weights={weights}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleSelect}
+                  onRemove={removePosition}
+                />
+              </div>
+              <div className="space-y-4">
+                <DataSourceConfig config={apiConfig} onChange={setApiConfig} />
+                <WeightSliders weights={weights} onChange={setWeights} />
+              </div>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <PayoffDiagram positions={selectedPositions} />
+              <ScoreBreakdown positions={selectedPositions} weights={weights} />
+            </div>
+          </>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+            <IdeaGenerator
+              apiConfig={apiConfig}
               weights={weights}
-              selectedIds={selectedIds}
-              onToggleSelect={toggleSelect}
-              onRemove={removePosition}
+              ideas={ideas}
+              onIdeasChange={setIdeas}
+              onAddToScreener={addFromIdeas}
             />
+            <div className="space-y-4">
+              <DataSourceConfig config={apiConfig} onChange={setApiConfig} />
+              <WeightSliders weights={weights} onChange={setWeights} />
+            </div>
           </div>
-          <div className="space-y-4">
-            <DataSourceConfig config={apiConfig} onChange={setApiConfig} />
-            <WeightSliders weights={weights} onChange={setWeights} />
-          </div>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <PayoffDiagram positions={selectedPositions} />
-          <ScoreBreakdown positions={selectedPositions} weights={weights} />
-        </div>
+        )}
       </div>
     </div>
   );

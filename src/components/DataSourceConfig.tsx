@@ -10,6 +10,7 @@ interface Props {
 export default function DataSourceConfig({ config, onChange }: Props) {
   const [showTradier, setShowTradier] = useState(false);
   const [showFinnhub, setShowFinnhub] = useState(false);
+  const [showClaude, setShowClaude] = useState(false);
   const [expanded, setExpanded] = useState(!config.tradierToken);
 
   const inputClass = 'w-full rounded bg-slate-800 border border-slate-600 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono';
@@ -102,6 +103,37 @@ export default function DataSourceConfig({ config, onChange }: Props) {
               </button>
             </div>
             <p className="text-[10px] text-slate-600">Optional — populates earnings dates for scoring. Free tier: 60 req/min.</p>
+          </div>
+
+          {/* Claude section */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-amber-400">Claude API (Idea Generator)</span>
+              <a
+                href="https://console.anthropic.com/settings/keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] text-slate-500 hover:text-slate-400 flex items-center gap-1"
+              >
+                Get API key <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+            <div className="relative">
+              <input
+                className={inputClass}
+                type={showClaude ? 'text' : 'password'}
+                placeholder="Anthropic API key (sk-ant-...)"
+                value={config.claudeApiKey}
+                onChange={(e) => onChange({ ...config, claudeApiKey: e.target.value })}
+              />
+              <button
+                onClick={() => setShowClaude(!showClaude)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-400"
+              >
+                {showClaude ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-600">Required for AI thesis generation. Uses Claude Sonnet for analysis.</p>
           </div>
 
           {/* Info */}

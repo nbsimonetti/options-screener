@@ -98,6 +98,7 @@ export interface APIConfig {
   schwabClientId: string;
   schwabRefreshToken: string;
   finnhubToken: string;
+  claudeApiKey: string;
 }
 
 export const DEFAULT_API_CONFIG: APIConfig = {
@@ -107,6 +108,7 @@ export const DEFAULT_API_CONFIG: APIConfig = {
   schwabClientId: '',
   schwabRefreshToken: '',
   finnhubToken: '',
+  claudeApiKey: '',
 };
 
 export const LS_API_CONFIG = 'options-screener-api-config';
@@ -184,3 +186,37 @@ export function createEmptyPosition(): OptionPosition {
     contractSize: 100,
   };
 }
+
+// --- AI Idea Generator ---
+
+export type AppView = 'screener' | 'ideas';
+
+export interface IdeaThesis {
+  summary: string;
+  setup: string;
+  rationale: string;
+  keyMetrics: string;
+  risks: string[];
+  catalysts: string[];
+  confidence: 'high' | 'medium' | 'low';
+  analystNote: string;
+}
+
+export interface InvestmentIdea {
+  id: string;
+  position: OptionPosition;
+  score: PositionScore;
+  thesis: IdeaThesis;
+  generatedAt: string;
+}
+
+export interface ScanProgress {
+  phase: 'idle' | 'fetching' | 'scoring' | 'analyzing' | 'complete' | 'error';
+  current: number;
+  total: number;
+  currentTicker: string;
+  message: string;
+}
+
+export const LS_IDEAS = 'options-screener-ideas';
+export const LS_WATCHLIST = 'options-screener-watchlist';
