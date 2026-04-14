@@ -108,6 +108,7 @@ export interface ChainFilter {
   minDTE: number;
   maxDTE: number;
   minOTMPct: number;
+  maxOTMPct: number;
 }
 
 export const DEFAULT_CHAIN_FILTER: ChainFilter = {
@@ -117,6 +118,7 @@ export const DEFAULT_CHAIN_FILTER: ChainFilter = {
   minDTE: 14,
   maxDTE: 60,
   minOTMPct: 2,
+  maxOTMPct: 15,
 };
 
 export function createEmptyPosition(): OptionPosition {
@@ -173,3 +175,21 @@ export interface ScanProgress {
 
 export const LS_IDEAS = 'options-screener-ideas';
 export const LS_WATCHLIST = 'options-screener-watchlist';
+
+export interface ScanFilter {
+  minAnnualYield: number; // decimal, e.g. 0.10 = 10%
+  minDTE: number;
+  maxDTE: number;
+  minOTMPct: number;
+  maxOTMPct: number;
+}
+
+export const DEFAULT_SCAN_FILTER: ScanFilter = {
+  minAnnualYield: 0.10,
+  minDTE: 14,
+  maxDTE: 60,
+  minOTMPct: 1,
+  maxOTMPct: 15,
+};
+
+export const LS_SCAN_FILTER = 'options-screener-scan-filter';

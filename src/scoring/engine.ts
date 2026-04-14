@@ -106,7 +106,7 @@ export function scorePosition(pos: OptionPosition, weights: ScoringWeights): Pos
       weightedScore: yield_.score * weights.annualizedYield,
     },
     {
-      label: 'Delta (P(OTM))',
+      label: 'Delta (P(Safe))',
       key: 'delta',
       rawValue: delta_.raw,
       rawUnit: 'delta',
@@ -118,7 +118,7 @@ export function scorePosition(pos: OptionPosition, weights: ScoringWeights): Pos
       label: 'IV Rank',
       key: 'ivRank',
       rawValue: iv_.raw,
-      rawUnit: '%',
+      rawUnit: 'ivr',
       normalizedScore: iv_.score,
       weight: weights.ivRank,
       weightedScore: iv_.score * weights.ivRank,

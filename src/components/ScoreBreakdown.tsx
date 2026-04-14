@@ -12,7 +12,7 @@ const COLORS = ['#34d399', '#60a5fa', '#c084fc', '#f472b6', '#fbbf24', '#f87171'
 
 const SHORT_LABELS: Record<string, string> = {
   'Annualized Yield': 'Yield',
-  'Delta (P(OTM))': 'Delta',
+  'Delta (P(Safe))': 'P(Safe)',
   'IV Rank': 'IV Rank',
   'Liquidity': 'Liquidity',
   'Theta Efficiency': 'Theta',

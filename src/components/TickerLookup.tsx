@@ -6,7 +6,7 @@ import { getQuote, getOptionChain } from '../services/marketdata';
 import type { MDQuote, MDOption } from '../services/marketdata';
 import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from '../services/ivRank';
 import { filterMDChain, mdChainToPositions } from '../services/adapter';
-import { formatCurrency, formatPercent, formatDelta } from '../utils/formatting';
+import { formatCurrency, formatPercent, formatDelta, formatIVRank } from '../utils/formatting';
 
 interface Props {
   apiConfig: APIConfig;
@@ -167,13 +167,13 @@ export default function TickerLookup({ apiConfig, onImport }: Props) {
               {quote.change >= 0 ? '+' : ''}{formatCurrency(quote.change)} ({formatPercent(quote.changepct)})
             </span>
           )}
-          <span>IV Rank: <span className="text-white font-mono">{ivRank.toFixed(0)}</span></span>
+          <span>IV Rank: <span className="text-white font-mono">{formatIVRank(ivRank)}</span></span>
           {chainExpiration && <span>Exp: <span className="text-white">{chainExpiration}</span></span>}
         </div>
       )}
 
       {showFilters && (
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 bg-slate-900/50 rounded p-3">
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3 bg-slate-900/50 rounded p-3">
           <div>
             <label className={labelClass}>Strategy</label>
             <select className={`${inputClass} w-full mt-1`} value={filter.strategy} onChange={(e) => { const f = { ...filter, strategy: e.target.value as StrategyType }; setFilter(f); if (quote) loadChain(quote); }}>
@@ -200,6 +200,10 @@ export default function TickerLookup({ apiConfig, onImport }: Props) {
           <div>
             <label className={labelClass}>Min OTM %</label>
             <input className={`${inputClass} w-full mt-1`} type="number" step="0.5" value={filter.minOTMPct} onChange={(e) => applyFilter({ ...filter, minOTMPct: +e.target.value })} />
+          </div>
+          <div>
+            <label className={labelClass}>Max OTM %</label>
+            <input className={`${inputClass} w-full mt-1`} type="number" step="0.5" value={filter.maxOTMPct} onChange={(e) => applyFilter({ ...filter, maxOTMPct: +e.target.value })} />
           </div>
         </div>
       )}

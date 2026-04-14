@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Plus, X, Shield, AlertTriangle, TrendingUp, MessageSquare } from 'lucide-react';
 import type { InvestmentIdea } from '../types';
-import { formatCurrency, formatPercent, formatDelta, scoreColor, scoreBgColor } from '../utils/formatting';
+import { formatCurrency, formatPercent, formatDelta, formatIVRank, formatPSafe, scoreColor, scoreBgColor } from '../utils/formatting';
 import { calcAnnualizedYield } from '../scoring/engine';
 import { getBreakeven, getMaxProfit } from '../utils/payoff';
 import PayoffDiagram from './PayoffDiagram';
@@ -53,7 +53,7 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
 
         <span className="text-xs text-slate-300 w-8">{p.dte}d</span>
 
-        <span className="text-xs text-slate-300 w-8">{p.ivRank.toFixed(0)}</span>
+        <span className="text-xs text-slate-300 w-12">{formatIVRank(p.ivRank)}</span>
 
         <span className={`ml-auto rounded border px-2 py-0.5 text-[10px] font-medium ${CONFIDENCE_STYLES[thesis.confidence]}`}>
           {thesis.confidence}
@@ -153,7 +153,8 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
                   { label: 'Max Profit', value: formatCurrency(getMaxProfit(p)) },
                   { label: 'Ann. Yield', value: formatPercent(annYield) },
                   { label: 'Delta', value: formatDelta(p.delta) },
-                  { label: 'IV Rank', value: `${p.ivRank.toFixed(0)}` },
+                  { label: 'P(Safe)', value: formatPSafe(p.delta) },
+                  { label: 'IV Rank', value: formatIVRank(p.ivRank) },
                   { label: 'DTE', value: `${p.dte}d` },
                   { label: 'Volume', value: p.volume.toLocaleString() },
                   { label: 'Open Int.', value: p.openInterest.toLocaleString() },

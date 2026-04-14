@@ -57,6 +57,7 @@ export function filterMDChain(
       otmPct = ((opt.strike - price) / price) * 100;
     }
     if (otmPct < filter.minOTMPct) return false;
+    if (otmPct > filter.maxOTMPct) return false;
 
     // Must have some premium
     const mid = opt.mid || opt.last || 0;

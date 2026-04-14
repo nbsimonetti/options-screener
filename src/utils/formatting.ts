@@ -22,6 +22,14 @@ export function formatDelta(value: number): string {
   return value.toFixed(2);
 }
 
+export function formatIVRank(value: number): string {
+  return value.toFixed(1);
+}
+
+export function formatPSafe(delta: number): string {
+  return `${((1 - Math.abs(delta)) * 100).toFixed(0)}%`;
+}
+
 export function scoreColor(score: number): string {
   if (score >= 70) return 'text-green-400';
   if (score >= 40) return 'text-yellow-400';

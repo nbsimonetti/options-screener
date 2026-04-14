@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Trash2, ChevronDown, ChevronRight, ArrowUpDown } from 'lucide-react';
 import type { OptionPosition, ScoringWeights } from '../types';
 import { scorePosition } from '../scoring/engine';
-import { formatCurrency, formatPercent, formatDelta, scoreColor, scoreBgColor } from '../utils/formatting';
+import { formatCurrency, formatPercent, formatDelta, formatIVRank, formatPSafe, scoreColor, scoreBgColor } from '../utils/formatting';
 import { calcAnnualizedYield } from '../scoring/engine';
 import { getBreakeven, getMaxProfit } from '../utils/payoff';
 
@@ -59,9 +59,9 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden">
-      <div className="overflow-x-auto">
+      <div className="overflow-auto max-h-[500px]">
         <table className="w-full text-sm">
-          <thead className="border-b border-slate-700 bg-slate-800">
+          <thead className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 shadow-sm">
             <tr>
               <th className="px-3 py-2 w-8"></th>
               <th className={thClass} onClick={() => toggleSort('score')}>
@@ -79,7 +79,10 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
                 <span className="flex items-center gap-1">Ann. Yield <ArrowUpDown className="h-3 w-3" /></span>
               </th>
               <th className={thClass} onClick={() => toggleSort('delta')}>
-                <span className="flex items-center gap-1">Delta <ArrowUpDown className="h-3 w-3" /></span>
+                <span className="flex items-center gap-1" title="Absolute delta — lower = safer">Delta <ArrowUpDown className="h-3 w-3" /></span>
+              </th>
+              <th className={thClass} onClick={() => toggleSort('delta')}>
+                <span className="flex items-center gap-1" title="Probability option expires OTM (not assigned)">P(Safe) <ArrowUpDown className="h-3 w-3" /></span>
               </th>
               <th className={thClass} onClick={() => toggleSort('dte')}>DTE</th>
               <th className={thClass} onClick={() => toggleSort('ivRank')}>IVR</th>
@@ -122,8 +125,9 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
                   <td className="px-3 py-2 text-emerald-400">{formatCurrency(pos.premium)}</td>
                   <td className="px-3 py-2 text-slate-300">{formatPercent(annualYield)}</td>
                   <td className="px-3 py-2 text-slate-300">{formatDelta(pos.delta)}</td>
+                  <td className="px-3 py-2 text-emerald-400 font-mono">{formatPSafe(pos.delta)}</td>
                   <td className="px-3 py-2 text-slate-300">{pos.dte}d</td>
-                  <td className="px-3 py-2 text-slate-300">{pos.ivRank}</td>
+                  <td className="px-3 py-2 text-slate-300">{formatIVRank(pos.ivRank)}</td>
                   <td className="px-3 py-2 text-slate-300">{formatCurrency(getBreakeven(pos))}</td>
                   <td className="px-3 py-2 text-emerald-400">{formatCurrency(getMaxProfit(pos))}</td>
                   <td className="px-3 py-2">
@@ -155,7 +159,12 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
                     {b.normalizedScore.toFixed(0)}
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1">
-                    {b.rawUnit === '%' ? formatPercent(b.rawValue) : b.rawUnit === 'delta' ? formatDelta(b.rawValue) : b.rawUnit === 'DTE' ? `${b.rawValue}d` : b.rawUnit === 'days' ? `${b.rawValue === Infinity ? 'N/A' : Math.round(b.rawValue as number) + 'd'}` : formatPercent(b.rawValue)}
+                    {b.rawUnit === '%' ? formatPercent(b.rawValue)
+                      : b.rawUnit === 'delta' ? `${formatDelta(b.rawValue)} (${formatPSafe(b.rawValue)} safe)`
+                      : b.rawUnit === 'ivr' ? formatIVRank(b.rawValue)
+                      : b.rawUnit === 'DTE' ? `${b.rawValue}d`
+                      : b.rawUnit === 'days' ? `${b.rawValue === Infinity ? 'N/A' : Math.round(b.rawValue as number) + 'd'}`
+                      : formatPercent(b.rawValue)}
                   </div>
                   <div className="text-[10px] text-slate-600 mt-0.5">wt: {b.weight} &rarr; {b.weightedScore.toFixed(0)}</div>
                 </div>

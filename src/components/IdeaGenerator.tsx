@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info } from 'lucide-react';
-import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition } from '../types';
-import { getUniverse, getWatchlist, addTicker, removeTicker, getDefaultUniverse } from '../services/universe';
+import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter } from '../types';
+import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER } from '../types';
+import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault } from '../services/universe';
 import { scanForIdeas } from '../services/scanner';
 import { generateTheses } from '../services/claude';
 import IdeaCard from './IdeaCard';
@@ -14,16 +15,30 @@ interface Props {
   onAddToScreener: (positions: OptionPosition[]) => void;
 }
 
+function loadScanFilter(): ScanFilter {
+  try {
+    const stored = localStorage.getItem(LS_SCAN_FILTER);
+    return stored ? { ...DEFAULT_SCAN_FILTER, ...JSON.parse(stored) } : DEFAULT_SCAN_FILTER;
+  } catch {
+    return DEFAULT_SCAN_FILTER;
+  }
+}
+
 export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange, onAddToScreener }: Props) {
   const [progress, setProgress] = useState<ScanProgress>({ phase: 'idle', current: 0, total: 0, currentTicker: '', message: '' });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [newTicker, setNewTicker] = useState('');
   const [error, setError] = useState('');
+  const [watchlistState, setWatchlistState] = useState<string[]>(() => getWatchlist());
+  const [scanFilter, setScanFilter] = useState<ScanFilter>(() => loadScanFilter());
+
+  useEffect(() => {
+    localStorage.setItem(LS_SCAN_FILTER, JSON.stringify(scanFilter));
+  }, [scanFilter]);
 
   const hasClaude = ((apiConfig.claudeApiKey) || '').length > 0;
 
-  const watchlist = getWatchlist();
   const defaultTickers = getDefaultUniverse();
   const universe = getUniverse();
 
@@ -32,16 +47,14 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
     setExpandedId(null);
 
     try {
-      // Phase 1: Scan tickers via MarketData.app
       setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting scan...' });
-      const candidates = await scanForIdeas(universe, weights, setProgress, apiConfig.marketDataToken || undefined);
+      const candidates = await scanForIdeas(universe, weights, setProgress, apiConfig.marketDataToken || undefined, scanFilter);
 
       if (candidates.length === 0) {
         setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.' });
         return;
       }
 
-      // Phase 2: Generate theses (Claude if key provided, otherwise algorithmic)
       const analysisType = hasClaude ? 'Claude' : 'algorithmic analysis';
       setProgress({ phase: 'analyzing', current: candidates.length, total: candidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...` });
 
@@ -57,7 +70,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       setError(msg);
       setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg });
     }
-  }, [universe, apiConfig, weights, hasClaude, onIdeasChange]);
+  }, [universe, apiConfig, weights, hasClaude, onIdeasChange, scanFilter]);
 
   const handleAddToScreener = (idea: InvestmentIdea) => {
     onAddToScreener([idea.position]);
@@ -68,16 +81,33 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   };
 
   const handleAddWatchlistTicker = () => {
-    if (newTicker.trim()) {
-      addTicker(newTicker);
-      setNewTicker('');
-    }
+    const t = newTicker.trim().toUpperCase();
+    if (!t) return;
+    addTicker(t);
+    setWatchlistState(getWatchlist());
+    setNewTicker('');
+  };
+
+  const handleRemoveTicker = (ticker: string) => {
+    removeTicker(ticker);
+    setWatchlistState(getWatchlist());
+  };
+
+  const handleClearWatchlist = () => {
+    setWatchlist([]);
+    setWatchlistState([]);
+  };
+
+  const handleResetWatchlist = () => {
+    resetToDefault();
+    setWatchlistState([]);
   };
 
   const isScanning = progress.phase === 'fetching' || progress.phase === 'scoring' || progress.phase === 'analyzing';
   const progressPct = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
 
   const inputClass = 'rounded bg-slate-800 border border-slate-600 px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500';
+  const labelClass = 'text-[10px] font-medium text-slate-500 uppercase tracking-wider';
 
   return (
     <div className="space-y-4">
@@ -109,7 +139,6 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
           </span>
         </div>
 
-        {/* Info banner */}
         {!hasClaude && (
           <div className="mt-3 flex items-center gap-3 rounded border border-blue-700/50 bg-blue-900/20 p-3">
             <Info className="h-4 w-4 text-blue-400 shrink-0" />
@@ -119,7 +148,6 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
           </div>
         )}
 
-        {/* Progress bar */}
         {isScanning && (
           <div className="mt-3 space-y-1">
             <div className="flex items-center justify-between text-xs text-slate-400">
@@ -140,13 +168,69 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
       {/* Settings panel */}
       {showSettings && (
-        <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-3">
-          <h3 className="text-xs font-semibold text-white">Scan Universe</h3>
-          <p className="text-[10px] text-slate-500">
-            Default: {defaultTickers.length} tickers (S&P 500 components + liquid ETFs). Custom watchlist tickers are added to the scan.
-          </p>
-
+        <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-4">
+          {/* Scan filters */}
           <div>
+            <h3 className="text-xs font-semibold text-white mb-2">Scan Filters</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div>
+                <label className={labelClass}>Min Ann. Yield %</label>
+                <input
+                  className={`${inputClass} w-full mt-1`}
+                  type="number"
+                  step="1"
+                  value={+(scanFilter.minAnnualYield * 100).toFixed(1)}
+                  onChange={(e) => setScanFilter({ ...scanFilter, minAnnualYield: +e.target.value / 100 })}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Min DTE</label>
+                <input
+                  className={`${inputClass} w-full mt-1`}
+                  type="number"
+                  value={scanFilter.minDTE}
+                  onChange={(e) => setScanFilter({ ...scanFilter, minDTE: +e.target.value })}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Max DTE</label>
+                <input
+                  className={`${inputClass} w-full mt-1`}
+                  type="number"
+                  value={scanFilter.maxDTE}
+                  onChange={(e) => setScanFilter({ ...scanFilter, maxDTE: +e.target.value })}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Min OTM %</label>
+                <input
+                  className={`${inputClass} w-full mt-1`}
+                  type="number"
+                  step="0.5"
+                  value={scanFilter.minOTMPct}
+                  onChange={(e) => setScanFilter({ ...scanFilter, minOTMPct: +e.target.value })}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Max OTM %</label>
+                <input
+                  className={`${inputClass} w-full mt-1`}
+                  type="number"
+                  step="0.5"
+                  value={scanFilter.maxOTMPct}
+                  onChange={(e) => setScanFilter({ ...scanFilter, maxOTMPct: +e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Watchlist */}
+          <div>
+            <h3 className="text-xs font-semibold text-white mb-2">Scan Universe</h3>
+            <p className="text-[10px] text-slate-500 mb-2">
+              Default: {defaultTickers.length} tickers (S&P 500 + liquid ETFs). Custom watchlist tickers are added to the scan.
+            </p>
+
             <div className="flex gap-2 mb-2">
               <input
                 className={`${inputClass} flex-1`}
@@ -159,20 +243,36 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 <Plus className="h-4 w-4" />
               </button>
             </div>
-            {watchlist.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {watchlist.map((t) => (
+
+            {watchlistState.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 items-center">
+                {watchlistState.map((t) => (
                   <span key={t} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
                     {t}
-                    <button onClick={() => removeTicker(t)} className="text-slate-500 hover:text-red-400">
+                    <button
+                      onClick={() => handleRemoveTicker(t)}
+                      className="text-slate-500 hover:text-red-400 transition-colors"
+                      aria-label={`Remove ${t}`}
+                    >
                       <X className="h-3 w-3" />
                     </button>
                   </span>
                 ))}
-                <button onClick={() => { /* force re-render via state */ setNewTicker(''); }} className="text-[10px] text-slate-500 hover:text-slate-400 flex items-center gap-1">
+                <button
+                  onClick={handleClearWatchlist}
+                  className="text-[10px] text-slate-500 hover:text-red-400 flex items-center gap-1 ml-1"
+                >
+                  <X className="h-3 w-3" /> Clear all
+                </button>
+                <button
+                  onClick={handleResetWatchlist}
+                  className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1 ml-1"
+                >
                   <RotateCcw className="h-3 w-3" /> Reset
                 </button>
               </div>
+            ) : (
+              <p className="text-[10px] text-slate-600 italic">No custom tickers. Scanning {defaultTickers.length} default tickers only.</p>
             )}
           </div>
         </div>
@@ -191,7 +291,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
             <span className="w-16">Yield</span>
             <span className="w-12">Delta</span>
             <span className="w-8">DTE</span>
-            <span className="w-8">IVR</span>
+            <span className="w-12">IVR</span>
             <span className="w-16 ml-auto">Conf.</span>
             <span className="flex-1">Summary</span>
           </div>
@@ -223,7 +323,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-12 text-center">
           <Sparkles className="h-8 w-8 text-slate-600 mx-auto mb-3" />
           <p className="text-sm text-slate-500">Click "Generate Ideas" to scan {universe.length} tickers and find the best CSP and CC opportunities.</p>
-          <p className="text-xs text-slate-600 mt-1">No API keys required — uses free Yahoo Finance data with Black-Scholes Greeks.</p>
+          <p className="text-xs text-slate-600 mt-1">Uses free MarketData.app data — no API key required for AAPL demo.</p>
         </div>
       )}
     </div>

@@ -1,9 +1,10 @@
-import type { OptionPosition, ScoringWeights, ScanProgress } from '../types';
+import type { OptionPosition, ScoringWeights, ScanProgress, ScanFilter } from '../types';
 import type { PositionScore } from '../types';
+import { DEFAULT_SCAN_FILTER } from '../types';
 import { getQuote, getOptionChain } from './marketdata';
 import { filterMDChain, mdChainToPositions } from './adapter';
 import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from './ivRank';
-import { scorePosition } from '../scoring/engine';
+import { scorePosition, calcAnnualizedYield } from '../scoring/engine';
 
 export interface ScanCandidate {
   position: OptionPosition;
@@ -21,9 +22,11 @@ export async function scanForIdeas(
   weights: ScoringWeights,
   onProgress: (progress: ScanProgress) => void,
   marketDataToken?: string,
+  scanFilter: ScanFilter = DEFAULT_SCAN_FILTER,
 ): Promise<ScanCandidate[]> {
   const all: ScanCandidate[] = [];
   const total = universe.length;
+  const targetDTE = Math.round((scanFilter.minDTE + scanFilter.maxDTE) / 2);
 
   onProgress({ phase: 'fetching', current: 0, total, currentTicker: '', message: 'Starting scan...' });
 
@@ -42,37 +45,36 @@ export async function scanForIdeas(
       const price = quote.last || quote.mid || 0;
       if (!price) continue;
 
-      // Fetch puts (CSP candidates) and calls (CC candidates) with ~35 DTE target
       const [puts, calls] = await Promise.all([
-        getOptionChain(ticker, marketDataToken, { dte: 35, side: 'put', strikeLimit: 20 }),
-        getOptionChain(ticker, marketDataToken, { dte: 35, side: 'call', strikeLimit: 20 }),
+        getOptionChain(ticker, marketDataToken, { dte: targetDTE, side: 'put', strikeLimit: 20 }),
+        getOptionChain(ticker, marketDataToken, { dte: targetDTE, side: 'call', strikeLimit: 20 }),
       ]);
 
       const chain = [...puts, ...calls];
       if (chain.length === 0) continue;
 
-      // IV Rank
       let ivRank = getCachedIVRank(ticker);
       if (ivRank === null) {
         ivRank = estimateIVRankFromChain(chain, price);
         setCachedIVRank(ticker, ivRank);
       }
 
-      // Score CSP candidates
       const cspFiltered = filterMDChain(puts, quote, {
-        strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40, minDTE: 14, maxDTE: 60, minOTMPct: 1,
+        strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40,
+        minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
+        minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
       });
       const cspPositions = mdChainToPositions(cspFiltered, quote, 'CSP', ivRank, '');
       const cspScored = cspPositions.map((pos) => ({ position: pos, score: scorePosition(pos, weights) }));
 
-      // Score CC candidates
       const ccFiltered = filterMDChain(calls, quote, {
-        strategy: 'CC', minDelta: 0.10, maxDelta: 0.40, minDTE: 14, maxDTE: 60, minOTMPct: 1,
+        strategy: 'CC', minDelta: 0.10, maxDelta: 0.40,
+        minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
+        minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
       });
       const ccPositions = mdChainToPositions(ccFiltered, quote, 'CC', ivRank, '');
       const ccScored = ccPositions.map((pos) => ({ position: pos, score: scorePosition(pos, weights) }));
 
-      // Keep single best per strategy per ticker
       const bestCSP = cspScored.sort((a, b) => b.score.compositeScore - a.score.compositeScore)[0];
       const bestCC = ccScored.sort((a, b) => b.score.compositeScore - a.score.compositeScore)[0];
 
@@ -89,6 +91,11 @@ export async function scanForIdeas(
 
   onProgress({ phase: 'scoring', current: total, total, currentTicker: '', message: 'Ranking candidates...' });
 
-  all.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
-  return all.slice(0, 15);
+  // Apply annualized yield floor
+  const yieldFiltered = all.filter(
+    (c) => calcAnnualizedYield(c.position) >= scanFilter.minAnnualYield,
+  );
+
+  yieldFiltered.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
+  return yieldFiltered.slice(0, 15);
 }

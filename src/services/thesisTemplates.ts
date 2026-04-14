@@ -2,7 +2,7 @@ import type { IdeaThesis, OptionPosition, ScoreBreakdownItem, InvestmentIdea } f
 import type { ScanCandidate } from './scanner';
 import { calcAnnualizedYield } from '../scoring/engine';
 import { getBreakeven } from '../utils/payoff';
-import { formatCurrency, formatPercent, formatDelta } from '../utils/formatting';
+import { formatCurrency, formatPercent, formatDelta, formatIVRank } from '../utils/formatting';
 
 type Tier = 'strong' | 'neutral' | 'weak';
 
@@ -46,9 +46,9 @@ function deltaObs(p: OptionPosition, b: ScoreBreakdownItem): string {
   const prob = probOTM(p.delta);
   const t = tier(b.normalizedScore);
   if (t === 'strong') {
-    return `${formatDelta(p.delta)} delta implies ~${prob}% probability of expiring OTM (not assigned) — favorable odds for the seller.`;
+    return `${formatDelta(p.delta)} delta implies ~${prob}% probability of staying safe (not assigned) — favorable odds for the seller.`;
   } else if (t === 'neutral') {
-    return `${formatDelta(p.delta)} delta gives ~${prob}% probability of expiring worthless — reasonable but not deeply OTM.`;
+    return `${formatDelta(p.delta)} delta gives ~${prob}% probability of staying safe — reasonable but not deeply OTM.`;
   }
   return `${formatDelta(p.delta)} delta puts the probability of assignment at ${100 - prob}% — uncomfortably close to ATM.`;
 }
@@ -56,11 +56,11 @@ function deltaObs(p: OptionPosition, b: ScoreBreakdownItem): string {
 function ivRankObs(p: OptionPosition, b: ScoreBreakdownItem): string {
   const t = tier(b.normalizedScore);
   if (t === 'strong') {
-    return `IV Rank of ${p.ivRank.toFixed(0)} means current volatility is in the ${p.ivRank.toFixed(0)}th percentile of its range — selling premium at an elevated level.`;
+    return `IV Rank of ${formatIVRank(p.ivRank)} means current volatility is in the ${formatIVRank(p.ivRank)} percentile of its range — selling premium at an elevated level.`;
   } else if (t === 'neutral') {
-    return `IV Rank of ${p.ivRank.toFixed(0)} is mid-range — premium is neither rich nor cheap relative to historical norms.`;
+    return `IV Rank of ${formatIVRank(p.ivRank)} is mid-range — premium is neither rich nor cheap relative to historical norms.`;
   }
-  return `IV Rank of ${p.ivRank.toFixed(0)} suggests volatility is compressed — premium may be cheap relative to potential moves.`;
+  return `IV Rank of ${formatIVRank(p.ivRank)} suggests volatility is compressed — premium may be cheap relative to potential moves.`;
 }
 
 function liquidityObs(p: OptionPosition, b: ScoreBreakdownItem): string {
@@ -198,7 +198,7 @@ function buildThesis(candidate: ScanCandidate): IdeaThesis {
   const deltaItem = classified.find((c) => c.key === 'delta')!;
 
   if (ivItem.tier === 'strong' && deltaItem.tier === 'strong') {
-    analystNote = `High IV Rank (${p.ivRank.toFixed(0)}) paired with low delta (${formatDelta(p.delta)}) is the ideal premium-selling setup — elevated vol with high probability of profit. Confidence: ${confidence} — ${S} strong, ${N} neutral, ${W} weak scoring factors.`;
+    analystNote = `High IV Rank (${formatIVRank(p.ivRank)}) paired with low delta (${formatDelta(p.delta)}) is the ideal premium-selling setup — elevated vol with high probability of profit. Confidence: ${confidence} — ${S} strong, ${N} neutral, ${W} weak scoring factors.`;
   } else if (W === 0) {
     analystNote = `No weak scoring factors across all 7 components — a well-rounded candidate. Confidence: ${confidence} — ${S} strong, ${N} neutral, ${W} weak.`;
   } else {
