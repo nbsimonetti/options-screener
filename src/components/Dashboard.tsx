@@ -170,7 +170,7 @@ export default function Dashboard() {
           <>
             <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
               <div className="space-y-4">
-                <TickerLookup apiConfig={apiConfig} onImport={importPositions} />
+                <TickerLookup onImport={importPositions} />
                 <PositionEntry onAdd={addPosition} />
                 <CSVImport onImport={importPositions} />
                 <PositionTable

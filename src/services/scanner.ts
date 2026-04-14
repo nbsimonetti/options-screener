@@ -1,9 +1,8 @@
-import type { APIConfig, OptionPosition, ScoringWeights, ScanProgress } from '../types';
+import type { OptionPosition, ScoringWeights, ScanProgress } from '../types';
 import type { PositionScore } from '../types';
-import { getQuote, getExpirations, getOptionChain } from './tradier';
-import { filterChain, chainToPositions } from './adapter';
-import { estimateIVRankFromATM, getCachedIVRank, setCachedIVRank } from './ivRank';
-import { getNextEarningsDate } from './finnhub';
+import { getOptionChain } from './yahoo';
+import { filterYahooChain, yahooChainToPositions } from './adapter';
+import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from './ivRank';
 import { scorePosition } from '../scoring/engine';
 
 export interface ScanCandidate {
@@ -11,7 +10,7 @@ export interface ScanCandidate {
   score: PositionScore;
 }
 
-const SCAN_DELAY_MS = 600;
+const SCAN_DELAY_MS = 800;
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -19,7 +18,6 @@ function delay(ms: number): Promise<void> {
 
 export async function scanForIdeas(
   universe: string[],
-  apiConfig: APIConfig,
   weights: ScoringWeights,
   onProgress: (progress: ScanProgress) => void,
 ): Promise<ScanCandidate[]> {
@@ -39,78 +37,64 @@ export async function scanForIdeas(
     });
 
     try {
-      // Fetch quote
-      const quote = await getQuote(ticker, apiConfig.tradierToken, apiConfig.tradierSandbox);
-      if (!quote || (!quote.last && !quote.close)) continue;
+      // Fetch chain (includes quote + expirations)
+      const result = await getOptionChain(ticker);
+      const quote = result.quote;
+      const price = quote.regularMarketPrice || quote.regularMarketPreviousClose || 0;
+      if (!price) continue;
 
-      // Find best expiration (30-45 DTE target)
-      const expirations = await getExpirations(ticker, apiConfig.tradierToken, apiConfig.tradierSandbox);
-      if (expirations.length === 0) continue;
-
+      // Find best expiration (21-55 DTE target)
       const now = Date.now();
-      const targetExp = expirations.find((exp) => {
-        const dte = Math.ceil((new Date(exp + 'T16:00:00').getTime() - now) / (1000 * 60 * 60 * 24));
+      const targetExpEpoch = result.expirationDates.find((epoch) => {
+        const dte = Math.ceil((epoch * 1000 - now) / (1000 * 60 * 60 * 24));
         return dte >= 21 && dte <= 55;
-      }) || expirations[0];
+      }) || result.expirationDates[0];
 
-      // Fetch chain
-      const chain = await getOptionChain(ticker, targetExp, apiConfig.tradierToken, apiConfig.tradierSandbox);
-      if (chain.length === 0) continue;
+      if (!targetExpEpoch) continue;
+
+      // Fetch specific expiration if different from default
+      let calls = result.calls;
+      let puts = result.puts;
+      const defaultExp = result.calls[0]?.expiration || result.puts[0]?.expiration;
+      if (defaultExp && defaultExp !== targetExpEpoch) {
+        const specific = await getOptionChain(ticker, targetExpEpoch);
+        calls = specific.calls;
+        puts = specific.puts;
+      }
+
+      if (calls.length === 0 && puts.length === 0) continue;
 
       // IV Rank
       let ivRank = getCachedIVRank(ticker);
       if (ivRank === null) {
-        ivRank = estimateIVRankFromATM(chain, quote.last || quote.close || 0);
+        ivRank = estimateIVRankFromChain(calls, puts, price);
         setCachedIVRank(ticker, ivRank);
       }
 
-      // Earnings date
-      let earningsDate = '';
-      if (apiConfig.finnhubToken) {
-        earningsDate = await getNextEarningsDate(ticker, apiConfig.finnhubToken);
-      }
-
       // Filter and score CSP candidates
-      const cspFiltered = filterChain(chain, quote, {
-        strategy: 'CSP',
-        minDelta: 0.10,
-        maxDelta: 0.40,
-        minDTE: 14,
-        maxDTE: 60,
-        minOTMPct: 1,
+      const cspFiltered = filterYahooChain(calls, puts, quote, {
+        strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40, minDTE: 14, maxDTE: 60, minOTMPct: 1,
       });
-      const cspPositions = chainToPositions(cspFiltered, quote, 'CSP', ivRank, earningsDate);
-      const cspScored = cspPositions.map((pos) => ({
-        position: pos,
-        score: scorePosition(pos, weights),
-      }));
+      const cspPositions = yahooChainToPositions(cspFiltered, quote, 'CSP', ivRank);
+      const cspScored = cspPositions.map((pos) => ({ position: pos, score: scorePosition(pos, weights) }));
 
       // Filter and score CC candidates
-      const ccFiltered = filterChain(chain, quote, {
-        strategy: 'CC',
-        minDelta: 0.10,
-        maxDelta: 0.40,
-        minDTE: 14,
-        maxDTE: 60,
-        minOTMPct: 1,
+      const ccFiltered = filterYahooChain(calls, puts, quote, {
+        strategy: 'CC', minDelta: 0.10, maxDelta: 0.40, minDTE: 14, maxDTE: 60, minOTMPct: 1,
       });
-      const ccPositions = chainToPositions(ccFiltered, quote, 'CC', ivRank, earningsDate);
-      const ccScored = ccPositions.map((pos) => ({
-        position: pos,
-        score: scorePosition(pos, weights),
-      }));
+      const ccPositions = yahooChainToPositions(ccFiltered, quote, 'CC', ivRank);
+      const ccScored = ccPositions.map((pos) => ({ position: pos, score: scorePosition(pos, weights) }));
 
-      // Keep the single best CSP and best CC per ticker
+      // Keep single best per strategy per ticker
       const bestCSP = cspScored.sort((a, b) => b.score.compositeScore - a.score.compositeScore)[0];
       const bestCC = ccScored.sort((a, b) => b.score.compositeScore - a.score.compositeScore)[0];
 
       if (bestCSP) all.push(bestCSP);
       if (bestCC) all.push(bestCC);
     } catch {
-      // Skip tickers that fail — don't break the scan
+      // Skip tickers that fail
     }
 
-    // Rate limit
     if (i < universe.length - 1) {
       await delay(SCAN_DELAY_MS);
     }
@@ -118,7 +102,6 @@ export async function scanForIdeas(
 
   onProgress({ phase: 'scoring', current: total, total, currentTicker: '', message: 'Ranking candidates...' });
 
-  // Global rank by composite score, take top 15
   all.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
   return all.slice(0, 15);
 }

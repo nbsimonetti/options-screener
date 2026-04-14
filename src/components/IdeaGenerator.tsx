@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, AlertCircle } from 'lucide-react';
+import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info } from 'lucide-react';
 import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition } from '../types';
 import { getUniverse, getWatchlist, addTicker, removeTicker, getDefaultUniverse } from '../services/universe';
 import { scanForIdeas } from '../services/scanner';
@@ -21,32 +21,34 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   const [newTicker, setNewTicker] = useState('');
   const [error, setError] = useState('');
 
-  const hasTradier = (apiConfig.tradierToken || '').length > 0;
-  const hasClaude = (apiConfig.claudeApiKey || '').length > 0;
-  const canScan = hasTradier && hasClaude;
+  const hasClaude = ((apiConfig.claudeApiKey) || '').length > 0;
 
   const watchlist = getWatchlist();
   const defaultTickers = getDefaultUniverse();
   const universe = getUniverse();
 
   const runScan = useCallback(async () => {
-    if (!canScan) return;
     setError('');
     setExpandedId(null);
 
     try {
-      // Phase 1: Scan tickers
+      // Phase 1: Scan tickers (Yahoo Finance — no API key needed)
       setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting scan...' });
-      const candidates = await scanForIdeas(universe, apiConfig, weights, setProgress);
+      const candidates = await scanForIdeas(universe, weights, setProgress);
 
       if (candidates.length === 0) {
         setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.' });
         return;
       }
 
-      // Phase 2: Generate theses with Claude
-      setProgress({ phase: 'analyzing', current: candidates.length, total: candidates.length, currentTicker: '', message: `Analyzing ${candidates.length} candidates with Claude...` });
-      const newIdeas = await generateTheses(candidates, apiConfig.claudeApiKey);
+      // Phase 2: Generate theses (Claude if key provided, otherwise algorithmic)
+      const analysisType = hasClaude ? 'Claude' : 'algorithmic analysis';
+      setProgress({ phase: 'analyzing', current: candidates.length, total: candidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...` });
+
+      const newIdeas = await generateTheses(
+        candidates,
+        hasClaude ? apiConfig.claudeApiKey : undefined,
+      );
 
       onIdeasChange(newIdeas);
       setProgress({ phase: 'complete', current: newIdeas.length, total: newIdeas.length, currentTicker: '', message: `${newIdeas.length} ideas generated` });
@@ -55,7 +57,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       setError(msg);
       setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg });
     }
-  }, [canScan, universe, apiConfig, weights, onIdeasChange]);
+  }, [universe, apiConfig, weights, hasClaude, onIdeasChange]);
 
   const handleAddToScreener = (idea: InvestmentIdea) => {
     onAddToScreener([idea.position]);
@@ -88,7 +90,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
           <button
             onClick={runScan}
-            disabled={!canScan || isScanning}
+            disabled={isScanning}
             className="flex items-center gap-2 rounded bg-amber-600 px-5 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {isScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -103,18 +105,16 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
           </button>
 
           <span className="ml-auto text-xs text-slate-500">
-            {universe.length} tickers in universe
+            {universe.length} tickers &middot; {hasClaude ? 'AI theses' : 'Algorithmic analysis'}
           </span>
         </div>
 
-        {/* Missing API keys warning */}
-        {!canScan && (
-          <div className="mt-3 flex items-center gap-3 rounded border border-amber-700/50 bg-amber-900/20 p-3">
-            <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
-            <p className="text-xs text-amber-300">
-              {!hasTradier && 'Tradier API token required. '}
-              {!hasClaude && 'Claude API key required. '}
-              Configure in the Data Source panel in the sidebar.
+        {/* Info banner */}
+        {!hasClaude && (
+          <div className="mt-3 flex items-center gap-3 rounded border border-blue-700/50 bg-blue-900/20 p-3">
+            <Info className="h-4 w-4 text-blue-400 shrink-0" />
+            <p className="text-xs text-blue-300">
+              Using algorithmic analysis with full score traceability. Add a Claude API key in AI Settings for AI-powered theses.
             </p>
           </div>
         )}
@@ -146,7 +146,6 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
             Default: {defaultTickers.length} tickers (S&P 500 components + liquid ETFs). Custom watchlist tickers are added to the scan.
           </p>
 
-          {/* Custom watchlist */}
           <div>
             <div className="flex gap-2 mb-2">
               <input
@@ -156,10 +155,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 onChange={(e) => setNewTicker(e.target.value.toUpperCase())}
                 onKeyDown={(e) => e.key === 'Enter' && handleAddWatchlistTicker()}
               />
-              <button
-                onClick={handleAddWatchlistTicker}
-                className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 transition-colors"
-              >
+              <button onClick={handleAddWatchlistTicker} className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 transition-colors">
                 <Plus className="h-4 w-4" />
               </button>
             </div>
@@ -168,15 +164,12 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 {watchlist.map((t) => (
                   <span key={t} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
                     {t}
-                    <button onClick={() => { removeTicker(t); }} className="text-slate-500 hover:text-red-400">
+                    <button onClick={() => removeTicker(t)} className="text-slate-500 hover:text-red-400">
                       <X className="h-3 w-3" />
                     </button>
                   </span>
                 ))}
-                <button
-                  onClick={() => { removeTicker('__force_rerender__'); /* force re-render */ }}
-                  className="text-[10px] text-slate-500 hover:text-slate-400 flex items-center gap-1"
-                >
+                <button onClick={() => { /* force re-render via state */ setNewTicker(''); }} className="text-[10px] text-slate-500 hover:text-slate-400 flex items-center gap-1">
                   <RotateCcw className="h-3 w-3" /> Reset
                 </button>
               </div>
@@ -188,7 +181,6 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       {/* Results table */}
       {ideas.length > 0 && (
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden">
-          {/* Table header */}
           <div className="flex items-center gap-3 px-4 py-2 border-b border-slate-700 bg-slate-800 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
             <span className="w-6 text-right">#</span>
             <span className="w-4" />
@@ -231,7 +223,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-12 text-center">
           <Sparkles className="h-8 w-8 text-slate-600 mx-auto mb-3" />
           <p className="text-sm text-slate-500">Click "Generate Ideas" to scan {universe.length} tickers and find the best CSP and CC opportunities.</p>
-          <p className="text-xs text-slate-600 mt-1">The AI analyst will write an investment thesis for each top candidate.</p>
+          <p className="text-xs text-slate-600 mt-1">No API keys required — uses free Yahoo Finance data with Black-Scholes Greeks.</p>
         </div>
       )}
     </div>

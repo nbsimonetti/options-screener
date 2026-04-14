@@ -1,7 +1,7 @@
-import type { TradierOption } from '../types';
+import type { YahooOption } from './yahoo';
 
 const IV_CACHE_KEY = 'options-screener-iv-cache';
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface IVCacheEntry {
   ivRank: number;
@@ -34,41 +34,36 @@ export function setCachedIVRank(ticker: string, ivRank: number) {
   setCache(cache);
 }
 
-export function computeIVRankFromChain(chain: TradierOption[], currentATMiv: number): number {
-  // Collect all mid_iv values from the chain as a proxy for current IV surface
-  const ivValues = chain
-    .map((o) => o.greeks?.mid_iv)
-    .filter((v): v is number => v != null && v > 0);
-
-  if (ivValues.length === 0 || currentATMiv <= 0) return 50; // default
-
-  const minIV = Math.min(...ivValues);
-  const maxIV = Math.max(...ivValues);
-
-  if (maxIV === minIV) return 50;
-
-  // IV Rank = (current - low) / (high - low) * 100
-  const rank = ((currentATMiv - minIV) / (maxIV - minIV)) * 100;
-  return Math.max(0, Math.min(100, rank));
-}
-
-export function estimateIVRankFromATM(
-  chain: TradierOption[],
+export function estimateIVRankFromChain(
+  calls: YahooOption[],
+  puts: YahooOption[],
   currentPrice: number,
 ): number {
-  // Find the nearest ATM option
-  let atm: TradierOption | null = null;
-  let minDist = Infinity;
+  // Collect all IV values from the chain
+  const allOptions = [...calls, ...puts];
+  const ivValues = allOptions
+    .map((o) => o.impliedVolatility)
+    .filter((v): v is number => v != null && v > 0);
 
-  for (const opt of chain) {
+  if (ivValues.length === 0) return 50;
+
+  // Find ATM option (nearest to current price)
+  let atmIV = 0;
+  let minDist = Infinity;
+  for (const opt of allOptions) {
     const dist = Math.abs(opt.strike - currentPrice);
-    if (dist < minDist && opt.greeks?.mid_iv) {
+    if (dist < minDist && opt.impliedVolatility > 0) {
       minDist = dist;
-      atm = opt;
+      atmIV = opt.impliedVolatility;
     }
   }
 
-  if (!atm || !atm.greeks?.mid_iv) return 50;
+  if (atmIV <= 0) return 50;
 
-  return computeIVRankFromChain(chain, atm.greeks.mid_iv);
+  const minIV = Math.min(...ivValues);
+  const maxIV = Math.max(...ivValues);
+  if (maxIV === minIV) return 50;
+
+  const rank = ((atmIV - minIV) / (maxIV - minIV)) * 100;
+  return Math.max(0, Math.min(100, rank));
 }

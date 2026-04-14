@@ -87,66 +87,17 @@ export const WEIGHT_PRESETS: WeightPreset[] = [
   },
 ];
 
-// --- API Configuration ---
-
-export type DataSource = 'tradier' | 'schwab' | 'manual';
+// --- Configuration ---
 
 export interface APIConfig {
-  source: DataSource;
-  tradierToken: string;
-  tradierSandbox: boolean;
-  schwabClientId: string;
-  schwabRefreshToken: string;
-  finnhubToken: string;
   claudeApiKey: string;
 }
 
 export const DEFAULT_API_CONFIG: APIConfig = {
-  source: 'tradier',
-  tradierToken: '',
-  tradierSandbox: true,
-  schwabClientId: '',
-  schwabRefreshToken: '',
-  finnhubToken: '',
   claudeApiKey: '',
 };
 
 export const LS_API_CONFIG = 'options-screener-api-config';
-
-export interface TradierQuote {
-  symbol: string;
-  last: number;
-  change: number;
-  change_percentage: number;
-  close: number;
-  trade_date: string;
-  description: string;
-}
-
-export interface TradierOption {
-  symbol: string;
-  description: string;
-  strike: number;
-  option_type: 'call' | 'put';
-  expiration_date: string;
-  bid: number;
-  ask: number;
-  last: number;
-  volume: number;
-  open_interest: number;
-  greeks?: {
-    delta: number;
-    gamma: number;
-    theta: number;
-    vega: number;
-    rho: number;
-    phi: number;
-    bid_iv: number;
-    mid_iv: number;
-    ask_iv: number;
-    smv_vol: number;
-  };
-}
 
 export interface ChainFilter {
   strategy: StrategyType;

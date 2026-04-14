@@ -85,8 +85,14 @@ IMPORTANT: Respond ONLY with a valid JSON array. No markdown, no code fences, no
 
 export async function generateTheses(
   candidates: ScanCandidate[],
-  apiKey: string,
+  apiKey?: string,
 ): Promise<InvestmentIdea[]> {
+  // Fallback to algorithmic templates when no Claude API key
+  if (!apiKey) {
+    const { generateTemplateTheses } = await import('./thesisTemplates');
+    return generateTemplateTheses(candidates);
+  }
+
   const candidateText = candidates
     .map((c, i) => formatCandidateForPrompt(c, i))
     .join('\n\n');
