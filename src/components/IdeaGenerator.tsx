@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info } from 'lucide-react';
 import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter } from '../types';
 import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER } from '../types';
-import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault } from '../services/universe';
+import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET } from '../services/universe';
 import { scanForIdeas } from '../services/scanner';
 import { generateTheses } from '../services/claude';
 import IdeaCard from './IdeaCard';
@@ -31,6 +31,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   const [newTicker, setNewTicker] = useState('');
   const [error, setError] = useState('');
   const [watchlistState, setWatchlistState] = useState<string[]>(() => getWatchlist());
+  const [excludedState, setExcludedState] = useState<string[]>(() => getExcluded());
   const [scanFilter, setScanFilter] = useState<ScanFilter>(() => loadScanFilter());
 
   useEffect(() => {
@@ -85,22 +86,39 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
     if (!t) return;
     addTicker(t);
     setWatchlistState(getWatchlist());
+    setExcludedState(getExcluded());
     setNewTicker('');
   };
 
-  const handleRemoveTicker = (ticker: string) => {
-    removeTicker(ticker);
-    setWatchlistState(getWatchlist());
+  const handleRemoveFromUniverse = (ticker: string) => {
+    if (DEFAULT_UNIVERSE_SET.has(ticker)) {
+      excludeTicker(ticker);
+      setExcludedState(getExcluded());
+    } else {
+      removeTicker(ticker);
+      setWatchlistState(getWatchlist());
+    }
   };
 
-  const handleClearWatchlist = () => {
+  const handleIncludeDefault = (ticker: string) => {
+    includeTicker(ticker);
+    setExcludedState(getExcluded());
+  };
+
+  const handleRestoreDefaults = () => {
+    clearExcluded();
+    setExcludedState([]);
+  };
+
+  const handleClearCustom = () => {
     setWatchlist([]);
     setWatchlistState([]);
   };
 
-  const handleResetWatchlist = () => {
+  const handleResetAll = () => {
     resetToDefault();
     setWatchlistState([]);
+    setExcludedState([]);
   };
 
   const isScanning = progress.phase === 'fetching' || progress.phase === 'scoring' || progress.phase === 'analyzing';
@@ -224,11 +242,11 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
             </div>
           </div>
 
-          {/* Watchlist */}
+          {/* Universe management */}
           <div>
             <h3 className="text-xs font-semibold text-white mb-2">Scan Universe</h3>
             <p className="text-[10px] text-slate-500 mb-2">
-              Default: {defaultTickers.length} tickers (S&P 500 + liquid ETFs). Custom watchlist tickers are added to the scan.
+              {defaultTickers.length} defaults + {watchlistState.length} custom &minus; {excludedState.length} excluded &nbsp;=&nbsp; <span className="text-emerald-400 font-mono">{universe.length}</span> being scanned
             </p>
 
             <div className="flex gap-2 mb-2">
@@ -244,36 +262,88 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
               </button>
             </div>
 
-            {watchlistState.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5 items-center">
-                {watchlistState.map((t) => (
-                  <span key={t} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
-                    {t}
-                    <button
-                      onClick={() => handleRemoveTicker(t)}
-                      className="text-slate-500 hover:text-red-400 transition-colors"
-                      aria-label={`Remove ${t}`}
+            {/* Active tickers */}
+            <div className="mb-2">
+              <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Scanning ({universe.length})</div>
+              {universe.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5 items-center max-h-[160px] overflow-y-auto p-2 rounded bg-slate-900/50 border border-slate-700">
+                  {universe.map((t) => {
+                    const isCustom = !DEFAULT_UNIVERSE_SET.has(t);
+                    return (
+                      <span
+                        key={t}
+                        className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs ${
+                          isCustom
+                            ? 'bg-emerald-900/40 text-emerald-200 border border-emerald-700/50'
+                            : 'bg-slate-700 text-slate-300'
+                        }`}
+                      >
+                        {isCustom && <span className="text-emerald-400">+</span>}
+                        {t}
+                        <button
+                          onClick={() => handleRemoveFromUniverse(t)}
+                          className="text-slate-500 hover:text-red-400 transition-colors"
+                          aria-label={`Remove ${t}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-[10px] text-slate-600 italic">No active tickers. Add some or restore defaults below.</p>
+              )}
+            </div>
+
+            {/* Excluded defaults */}
+            {excludedState.length > 0 && (
+              <div className="mb-2">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider">Excluded ({excludedState.length})</div>
+                  <button
+                    onClick={handleRestoreDefaults}
+                    className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                  >
+                    <RotateCcw className="h-3 w-3" /> Restore defaults
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5 items-center p-2 rounded bg-slate-900/30 border border-slate-800">
+                  {excludedState.map((t) => (
+                    <span
+                      key={t}
+                      className="flex items-center gap-1 rounded bg-slate-800/50 text-slate-500 border border-slate-700 px-2 py-0.5 text-xs"
                     >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
-                <button
-                  onClick={handleClearWatchlist}
-                  className="text-[10px] text-slate-500 hover:text-red-400 flex items-center gap-1 ml-1"
-                >
-                  <X className="h-3 w-3" /> Clear all
-                </button>
-                <button
-                  onClick={handleResetWatchlist}
-                  className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1 ml-1"
-                >
-                  <RotateCcw className="h-3 w-3" /> Reset
-                </button>
+                      {t}
+                      <button
+                        onClick={() => handleIncludeDefault(t)}
+                        className="text-slate-500 hover:text-emerald-400 transition-colors"
+                        aria-label={`Include ${t}`}
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
               </div>
-            ) : (
-              <p className="text-[10px] text-slate-600 italic">No custom tickers. Scanning {defaultTickers.length} default tickers only.</p>
             )}
+
+            {/* Bulk actions */}
+            <div className="flex gap-3 pt-1">
+              <button
+                onClick={handleClearCustom}
+                disabled={watchlistState.length === 0}
+                className="text-[10px] text-slate-500 hover:text-red-400 disabled:opacity-40 disabled:hover:text-slate-500 flex items-center gap-1"
+              >
+                <X className="h-3 w-3" /> Clear all custom
+              </button>
+              <button
+                onClick={handleResetAll}
+                className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1"
+              >
+                <RotateCcw className="h-3 w-3" /> Reset everything
+              </button>
+            </div>
           </div>
         </div>
       )}
