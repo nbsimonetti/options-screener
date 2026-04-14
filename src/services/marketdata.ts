@@ -1,5 +1,40 @@
 const BASE = 'https://api.marketdata.app/v1';
 
+// --- Request counter ---
+
+let requestCount = 0;
+let requestCountListener: ((n: number) => void) | null = null;
+
+export function resetRequestCount() {
+  requestCount = 0;
+  requestCountListener?.(0);
+}
+
+export function getRequestCount(): number {
+  return requestCount;
+}
+
+export function onRequestCountChange(cb: ((n: number) => void) | null) {
+  requestCountListener = cb;
+}
+
+export class BudgetExceededError extends Error {
+  limit: number;
+  used: number;
+  constructor(limit: number, used: number) {
+    super(`API request budget exceeded: ${used}/${limit}`);
+    this.name = 'BudgetExceededError';
+    this.limit = limit;
+    this.used = used;
+  }
+}
+
+export function enforceBudget(limit: number) {
+  if (requestCount >= limit) {
+    throw new BudgetExceededError(limit, requestCount);
+  }
+}
+
 async function mdFetch<T>(path: string, params?: Record<string, string>, token?: string): Promise<T> {
   const url = new URL(`${BASE}${path}`);
   if (params) {
@@ -13,7 +48,10 @@ async function mdFetch<T>(path: string, params?: Record<string, string>, token?:
     const text = await res.text();
     throw new Error(`MarketData API ${res.status}: ${text}`);
   }
-  return res.json();
+  const data = await res.json();
+  requestCount += 1;
+  requestCountListener?.(requestCount);
+  return data;
 }
 
 // --- Types ---

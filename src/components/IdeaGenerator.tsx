@@ -5,6 +5,7 @@ import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER } from '../types';
 import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET } from '../services/universe';
 import { scanForIdeas } from '../services/scanner';
 import { generateTheses } from '../services/claude';
+import { getRequestCount } from '../services/marketdata';
 import { calcAnnualizedYield } from '../scoring/engine';
 import IdeaCard from './IdeaCard';
 
@@ -48,7 +49,7 @@ function loadScanFilter(): ScanFilter {
 }
 
 export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange, onAddToScreener }: Props) {
-  const [progress, setProgress] = useState<ScanProgress>({ phase: 'idle', current: 0, total: 0, currentTicker: '', message: '' });
+  const [progress, setProgress] = useState<ScanProgress>({ phase: 'idle', current: 0, total: 0, currentTicker: '', message: '', requestsUsed: 0, requestBudget: 2000 });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [newTicker, setNewTicker] = useState('');
@@ -91,16 +92,17 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
     setExpandedId(null);
 
     try {
-      setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting scan...' });
+      setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting scan...', requestsUsed: 0, requestBudget: 2000 });
       const candidates = await scanForIdeas(universe, weights, setProgress, apiConfig.marketDataToken || undefined, scanFilter);
+      const usedNow = getRequestCount();
 
       if (candidates.length === 0) {
-        setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.' });
+        setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.', requestsUsed: usedNow, requestBudget: 2000 });
         return;
       }
 
       const analysisType = hasClaude ? 'Claude' : 'algorithmic analysis';
-      setProgress({ phase: 'analyzing', current: candidates.length, total: candidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...` });
+      setProgress({ phase: 'analyzing', current: candidates.length, total: candidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...`, requestsUsed: usedNow, requestBudget: 2000 });
 
       const newIdeas = await generateTheses(
         candidates,
@@ -108,11 +110,11 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       );
 
       onIdeasChange(newIdeas);
-      setProgress({ phase: 'complete', current: newIdeas.length, total: newIdeas.length, currentTicker: '', message: `${newIdeas.length} ideas generated` });
+      setProgress({ phase: 'complete', current: newIdeas.length, total: newIdeas.length, currentTicker: '', message: `${newIdeas.length} ideas generated · ${usedNow} API calls used`, requestsUsed: usedNow, requestBudget: 2000 });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Scan failed';
       setError(msg);
-      setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg });
+      setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg, requestsUsed: getRequestCount(), requestBudget: 2000 });
     }
   }, [universe, apiConfig, weights, hasClaude, onIdeasChange, scanFilter]);
 
@@ -213,7 +215,13 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
           <div className="mt-3 space-y-1">
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>{progress.message}</span>
-              <span>{progress.current}/{progress.total}</span>
+              <span>
+                {progress.current}/{progress.total} tickers &middot;{' '}
+                <span className={progress.requestsUsed >= 0.8 * progress.requestBudget ? 'text-amber-400 font-mono' : 'font-mono'}>
+                  {progress.requestsUsed}/{progress.requestBudget}
+                </span>{' '}
+                API calls
+              </span>
             </div>
             <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
               <div
@@ -221,6 +229,12 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 style={{ width: `${progress.phase === 'analyzing' ? 100 : progressPct}%` }}
               />
             </div>
+          </div>
+        )}
+
+        {!isScanning && progress.phase === 'complete' && progress.requestsUsed > 0 && (
+          <div className="mt-3 text-xs text-slate-500">
+            Last scan: <span className="font-mono text-slate-400">{progress.requestsUsed}</span> API calls used.
           </div>
         )}
 

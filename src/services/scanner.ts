@@ -1,7 +1,10 @@
 import type { OptionPosition, ScoringWeights, ScanProgress, ScanFilter } from '../types';
 import type { PositionScore } from '../types';
 import { DEFAULT_SCAN_FILTER } from '../types';
-import { getQuote, getOptionChain, getExpirations } from './marketdata';
+import {
+  getQuote, getOptionChain, getExpirations,
+  resetRequestCount, getRequestCount, BudgetExceededError, enforceBudget,
+} from './marketdata';
 import { filterMDChain, mdChainToPositions } from './adapter';
 import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from './ivRank';
 import { hasQuoteCached, hasChainCached, chainCacheKey, getCachedExpirations } from './marketdataCache';
@@ -15,6 +18,8 @@ export interface ScanCandidate {
 const SCAN_DELAY_MS = 700;
 const MAX_EXPIRATIONS_PER_TICKER = 3;
 const MAX_CANDIDATES_PER_TICKER = 2;
+const MAX_REQUESTS_PER_TICKER = 50;
+const MAX_TOTAL_REQUESTS = 2000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -31,11 +36,8 @@ function pickExpirations(expirations: string[], minDTE: number, maxDTE: number):
     .map((exp) => ({ exp, dte: dteFromDate(exp) }))
     .filter(({ dte }) => dte >= minDTE && dte <= maxDTE);
 
-  // Pick the N closest to the midpoint
   eligible.sort((a, b) => Math.abs(a.dte - midpoint) - Math.abs(b.dte - midpoint));
   const selected = eligible.slice(0, MAX_EXPIRATIONS_PER_TICKER).map((e) => e.exp);
-
-  // Sort by DTE ascending for deterministic iteration order
   selected.sort((a, b) => dteFromDate(a) - dteFromDate(b));
   return selected;
 }
@@ -47,23 +49,51 @@ export async function scanForIdeas(
   marketDataToken?: string,
   scanFilter: ScanFilter = DEFAULT_SCAN_FILTER,
 ): Promise<ScanCandidate[]> {
+  resetRequestCount();
   const all: ScanCandidate[] = [];
   const total = universe.length;
   const midpointDTE = (scanFilter.minDTE + scanFilter.maxDTE) / 2;
 
-  onProgress({ phase: 'fetching', current: 0, total, currentTicker: '', message: 'Starting scan...' });
+  const emit = (partial: Partial<ScanProgress>) => {
+    onProgress({
+      phase: 'fetching',
+      current: 0,
+      total,
+      currentTicker: '',
+      message: '',
+      requestsUsed: getRequestCount(),
+      requestBudget: MAX_TOTAL_REQUESTS,
+      ...partial,
+    });
+  };
+
+  emit({ phase: 'fetching', message: 'Starting scan...' });
 
   for (let i = 0; i < universe.length; i++) {
     const ticker = universe[i];
-    onProgress({
+
+    // Global budget check
+    if (getRequestCount() >= MAX_TOTAL_REQUESTS) {
+      emit({
+        phase: 'error',
+        current: i,
+        currentTicker: ticker,
+        message: `Total request budget reached (${MAX_TOTAL_REQUESTS}). Stopping scan.`,
+      });
+      break;
+    }
+
+    emit({
       phase: 'fetching',
       current: i + 1,
-      total,
       currentTicker: ticker,
       message: `Scanning ${ticker} (${i + 1}/${total})`,
     });
 
-    // Pre-check cache status to decide whether to skip the delay
+    const requestsBeforeTicker = getRequestCount();
+    const requestsThisTicker = () => getRequestCount() - requestsBeforeTicker;
+
+    // Pre-check cache status for skip-delay decision
     let allCached = false;
     const cachedExps = getCachedExpirations(ticker);
     if (hasQuoteCached(ticker) && cachedExps) {
@@ -77,35 +107,41 @@ export async function scanForIdeas(
     }
 
     try {
+      enforceBudget(MAX_TOTAL_REQUESTS);
+
       const quote = await getQuote(ticker, marketDataToken);
       const price = quote.last || quote.mid || 0;
       if (!price) continue;
+      if (requestsThisTicker() >= MAX_REQUESTS_PER_TICKER) continue;
 
       const expirations = await getExpirations(ticker, marketDataToken);
       const selectedExps = pickExpirations(expirations, scanFilter.minDTE, scanFilter.maxDTE);
       if (selectedExps.length === 0) continue;
+      if (requestsThisTicker() >= MAX_REQUESTS_PER_TICKER) continue;
 
-      // Fire off all chain fetches in parallel
-      const fetchPromises = selectedExps.flatMap((exp) => [
+      // Bound the chain fetches to what fits in the per-ticker budget
+      const remainingBudget = MAX_REQUESTS_PER_TICKER - requestsThisTicker();
+      const maxExpirationsWeCanAfford = Math.max(1, Math.floor(remainingBudget / 2));
+      const boundedExps = selectedExps.slice(0, maxExpirationsWeCanAfford);
+
+      const fetchPromises = boundedExps.flatMap((exp) => [
         getOptionChain(ticker, marketDataToken, { expiration: exp, side: 'put', strikeLimit: 20 }),
         getOptionChain(ticker, marketDataToken, { expiration: exp, side: 'call', strikeLimit: 20 }),
       ]);
       const results = await Promise.all(fetchPromises);
 
-      // Split back into per-expiration { puts, calls }
-      const chainsByExp = selectedExps.map((exp, idx) => ({
+      const chainsByExp = boundedExps.map((exp, idx) => ({
         expiration: exp,
         puts: results[idx * 2],
         calls: results[idx * 2 + 1],
       }));
 
-      // Compute IV rank from the expiration closest to the DTE midpoint
       let ivRank = getCachedIVRank(ticker);
       if (ivRank === null) {
         const closest = [...chainsByExp].sort(
           (a, b) => Math.abs(dteFromDate(a.expiration) - midpointDTE) - Math.abs(dteFromDate(b.expiration) - midpointDTE),
         )[0];
-        const blend = [...closest.puts, ...closest.calls];
+        const blend = closest ? [...closest.puts, ...closest.calls] : [];
         if (blend.length > 0) {
           ivRank = estimateIVRankFromChain(blend, price);
           setCachedIVRank(ticker, ivRank);
@@ -114,7 +150,6 @@ export async function scanForIdeas(
         }
       }
 
-      // Score each expiration's best CSP and best CC
       const tickerCandidates: ScanCandidate[] = [];
       for (const { puts, calls } of chainsByExp) {
         if (puts.length === 0 && calls.length === 0) continue;
@@ -142,11 +177,19 @@ export async function scanForIdeas(
         if (ccScored[0]) tickerCandidates.push(ccScored[0]);
       }
 
-      // Cap candidates per ticker to avoid one ticker dominating results
       tickerCandidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
       all.push(...tickerCandidates.slice(0, MAX_CANDIDATES_PER_TICKER));
-    } catch {
-      // Skip tickers that fail
+    } catch (e) {
+      if (e instanceof BudgetExceededError) {
+        emit({
+          phase: 'error',
+          current: i,
+          currentTicker: ticker,
+          message: `Total request budget reached (${MAX_TOTAL_REQUESTS}). Stopping scan.`,
+        });
+        break;
+      }
+      // Skip tickers that fail for other reasons
     }
 
     if (!allCached && i < universe.length - 1) {
@@ -154,7 +197,7 @@ export async function scanForIdeas(
     }
   }
 
-  onProgress({ phase: 'scoring', current: total, total, currentTicker: '', message: 'Ranking candidates...' });
+  emit({ phase: 'scoring', current: total, message: 'Ranking candidates...' });
 
   const yieldFiltered = all.filter(
     (c) => calcAnnualizedYield(c.position) >= scanFilter.minAnnualYield,

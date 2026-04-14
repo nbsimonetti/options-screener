@@ -173,6 +173,8 @@ export interface ScanProgress {
   total: number;
   currentTicker: string;
   message: string;
+  requestsUsed: number;
+  requestBudget: number;
 }
 
 export const LS_IDEAS = 'options-screener-ideas';
