@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { OptionPosition, ScoringWeights } from '../types';
-import { DEFAULT_WEIGHTS } from '../types';
+import type { OptionPosition, ScoringWeights, APIConfig } from '../types';
+import { DEFAULT_WEIGHTS, DEFAULT_API_CONFIG, LS_API_CONFIG } from '../types';
 import Header from './Header';
+import TickerLookup from './TickerLookup';
 import PositionEntry from './PositionEntry';
 import CSVImport from './CSVImport';
 import WeightSliders from './WeightSliders';
+import DataSourceConfig from './DataSourceConfig';
 import PositionTable from './PositionTable';
 import PayoffDiagram from './PayoffDiagram';
 import ScoreBreakdown from './ScoreBreakdown';
@@ -103,6 +105,9 @@ export default function Dashboard() {
   const [weights, setWeights] = useState<ScoringWeights>(() =>
     loadFromStorage(LS_WEIGHTS, DEFAULT_WEIGHTS)
   );
+  const [apiConfig, setApiConfig] = useState<APIConfig>(() =>
+    loadFromStorage(LS_API_CONFIG, DEFAULT_API_CONFIG)
+  );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(positions.map(p => p.id)));
 
   useEffect(() => {
@@ -112,6 +117,10 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem(LS_WEIGHTS, JSON.stringify(weights));
   }, [weights]);
+
+  useEffect(() => {
+    localStorage.setItem(LS_API_CONFIG, JSON.stringify(apiConfig));
+  }, [apiConfig]);
 
   const addPosition = useCallback((pos: OptionPosition) => {
     setPositions((prev) => [...prev, pos]);
@@ -145,6 +154,7 @@ export default function Dashboard() {
       <div className="mx-auto max-w-[1400px] p-4 space-y-4">
         <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
           <div className="space-y-4">
+            <TickerLookup apiConfig={apiConfig} onImport={importPositions} />
             <PositionEntry onAdd={addPosition} />
             <CSVImport onImport={importPositions} />
             <PositionTable
@@ -156,6 +166,7 @@ export default function Dashboard() {
             />
           </div>
           <div className="space-y-4">
+            <DataSourceConfig config={apiConfig} onChange={setApiConfig} />
             <WeightSliders weights={weights} onChange={setWeights} />
           </div>
         </div>
