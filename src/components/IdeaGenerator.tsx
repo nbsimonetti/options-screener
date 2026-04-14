@@ -351,33 +351,57 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       {/* Results table */}
       {ideas.length > 0 && (
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden">
-          <div className="flex items-center gap-3 px-4 py-2 border-b border-slate-700 bg-slate-800 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
-            <span className="w-6 text-right">#</span>
-            <span className="w-4" />
-            <span className="w-14">Score</span>
-            <span className="w-16">Ticker</span>
-            <span className="w-12">Type</span>
-            <span className="w-16">Strike</span>
-            <span className="w-16">Yield</span>
-            <span className="w-12">Delta</span>
-            <span className="w-8">DTE</span>
-            <span className="w-12">IVR</span>
-            <span className="w-16 ml-auto">Conf.</span>
-            <span className="flex-1">Summary</span>
+          <div className="max-h-[600px] overflow-auto">
+            <table className="w-full text-sm table-fixed">
+              <colgroup>
+                <col className="w-10" />
+                <col className="w-8" />
+                <col className="w-16" />
+                <col className="w-20" />
+                <col className="w-14" />
+                <col className="w-24" />
+                <col className="w-24" />
+                <col className="w-20" />
+                <col className="w-16" />
+                <col className="w-16" />
+                <col className="w-12" />
+                <col className="w-14" />
+                <col className="w-16" />
+                <col />
+              </colgroup>
+              <thead className="sticky top-0 z-10 bg-slate-800 border-b border-slate-700 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
+                <tr>
+                  <th className="px-2 py-2 text-right">#</th>
+                  <th></th>
+                  <th className="px-2 py-2 text-center">Score</th>
+                  <th className="px-2 py-2 text-left">Ticker</th>
+                  <th className="px-2 py-2 text-center">Type</th>
+                  <th className="px-2 py-2 text-right">Strike</th>
+                  <th className="px-2 py-2 text-right">Price</th>
+                  <th className="px-2 py-2 text-right">Yield</th>
+                  <th className="px-2 py-2 text-right" title="Absolute delta — lower = safer">Delta</th>
+                  <th className="px-2 py-2 text-right" title="Probability option expires OTM (not assigned)">P(Safe)</th>
+                  <th className="px-2 py-2 text-right">DTE</th>
+                  <th className="px-2 py-2 text-right">IVR</th>
+                  <th className="px-2 py-2 text-center">Conf.</th>
+                  <th className="px-2 py-2 text-left">Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ideas.map((idea, i) => (
+                  <IdeaCard
+                    key={idea.id}
+                    idea={idea}
+                    rank={i + 1}
+                    expanded={expandedId === idea.id}
+                    onToggle={() => setExpandedId(expandedId === idea.id ? null : idea.id)}
+                    onAddToScreener={() => handleAddToScreener(idea)}
+                    onDismiss={() => handleDismiss(idea.id)}
+                  />
+                ))}
+              </tbody>
+            </table>
           </div>
-
-          {ideas.map((idea, i) => (
-            <IdeaCard
-              key={idea.id}
-              idea={idea}
-              rank={i + 1}
-              expanded={expandedId === idea.id}
-              onToggle={() => setExpandedId(expandedId === idea.id ? null : idea.id)}
-              onAddToScreener={() => handleAddToScreener(idea)}
-              onDismiss={() => handleDismiss(idea.id)}
-            />
-          ))}
-
           <div className="px-4 py-2 border-t border-slate-700 bg-slate-800 flex items-center justify-between">
             <span className="text-[10px] text-slate-500">{ideas.length} ideas</span>
             {ideas.length > 0 && (

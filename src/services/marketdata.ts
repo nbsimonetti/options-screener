@@ -121,12 +121,24 @@ function chainToRows(data: MDChainResponse): MDOption[] {
   }));
 }
 
-// --- Public API ---
+// --- Public API (cached) ---
+
+import {
+  getCachedQuote, setCachedQuote,
+  getCachedExpirations, setCachedExpirations,
+  getCachedChain, setCachedChain,
+  chainCacheKey,
+} from './marketdataCache';
 
 export async function getQuote(ticker: string, token?: string): Promise<MDQuote> {
-  const data = await mdFetch<MDQuoteResponse>(`/stocks/quotes/${ticker.toUpperCase()}/`, {}, token);
+  const upper = ticker.toUpperCase();
+  const cached = getCachedQuote(upper);
+  if (cached) return cached;
+
+  const data = await mdFetch<MDQuoteResponse>(`/stocks/quotes/${upper}/`, {}, token);
   if (data.s !== 'ok') throw new Error(`No quote data for ${ticker}`);
-  return {
+
+  const quote: MDQuote = {
     symbol: data.symbol[0],
     ask: data.ask[0],
     bid: data.bid[0],
@@ -137,11 +149,18 @@ export async function getQuote(ticker: string, token?: string): Promise<MDQuote>
     volume: data.volume[0],
     updated: data.updated[0],
   };
+  setCachedQuote(upper, quote);
+  return quote;
 }
 
 export async function getExpirations(ticker: string, token?: string): Promise<string[]> {
-  const data = await mdFetch<MDExpirationsResponse>(`/options/expirations/${ticker.toUpperCase()}/`, {}, token);
+  const upper = ticker.toUpperCase();
+  const cached = getCachedExpirations(upper);
+  if (cached) return cached;
+
+  const data = await mdFetch<MDExpirationsResponse>(`/options/expirations/${upper}/`, {}, token);
   if (data.s !== 'ok' || !data.expirations) return [];
+  setCachedExpirations(upper, data.expirations);
   return data.expirations;
 }
 
@@ -150,12 +169,19 @@ export async function getOptionChain(
   token?: string,
   params?: { dte?: number; side?: 'call' | 'put'; strikeLimit?: number; expiration?: string },
 ): Promise<MDOption[]> {
+  const upper = ticker.toUpperCase();
+  const key = chainCacheKey(upper, params);
+  const cached = getCachedChain(key);
+  if (cached) return cached;
+
   const qp: Record<string, string> = {};
   if (params?.dte) qp.dte = String(params.dte);
   if (params?.side) qp.side = params.side;
   if (params?.strikeLimit) qp.strikeLimit = String(params.strikeLimit);
   if (params?.expiration) qp.expiration = params.expiration;
 
-  const data = await mdFetch<MDChainResponse>(`/options/chain/${ticker.toUpperCase()}/`, qp, token);
-  return chainToRows(data);
+  const data = await mdFetch<MDChainResponse>(`/options/chain/${upper}/`, qp, token);
+  const chain = chainToRows(data);
+  setCachedChain(key, chain);
+  return chain;
 }

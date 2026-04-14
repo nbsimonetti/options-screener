@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Settings, Eye, EyeOff, ExternalLink } from 'lucide-react';
+import { Settings, Eye, EyeOff, ExternalLink, Trash2 } from 'lucide-react';
 import type { APIConfig } from '../types';
+import { clearMarketDataCache, getCacheStats } from '../services/marketdataCache';
 
 interface Props {
   config: APIConfig;
@@ -103,13 +104,41 @@ export default function DataSourceConfig({ config, onChange }: Props) {
             </p>
           </div>
 
-          <div className="border-t border-slate-700 pt-3">
+          <div className="border-t border-slate-700 pt-3 space-y-2">
             <p className="text-[10px] text-slate-600">
               Keys stored in browser localStorage only. Options data includes real-time Greeks (delta, gamma, theta, vega) and IV from Market Data.
             </p>
+            <CacheControls />
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CacheControls() {
+  const [, setTick] = useState(0);
+  const stats = getCacheStats();
+  const total = stats.quotes + stats.expirations + stats.chains;
+
+  const handleClear = () => {
+    clearMarketDataCache();
+    setTick((t) => t + 1);
+  };
+
+  return (
+    <div>
+      <button
+        onClick={handleClear}
+        disabled={total === 0}
+        className="text-[10px] text-slate-500 hover:text-red-400 disabled:opacity-40 disabled:hover:text-slate-500 flex items-center gap-1"
+      >
+        <Trash2 className="h-3 w-3" /> Clear market data cache ({total})
+      </button>
+      <p className="text-[10px] text-slate-600 mt-1">
+        Quotes cached 15min &middot; expirations 1 day &middot; chains 1 hour.
+        {total > 0 && ` Current: ${stats.quotes} quotes, ${stats.expirations} expirations, ${stats.chains} chains.`}
+      </p>
     </div>
   );
 }

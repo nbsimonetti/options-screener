@@ -4,6 +4,7 @@ import { DEFAULT_SCAN_FILTER } from '../types';
 import { getQuote, getOptionChain } from './marketdata';
 import { filterMDChain, mdChainToPositions } from './adapter';
 import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from './ivRank';
+import { hasQuoteCached, hasChainCached, chainCacheKey } from './marketdataCache';
 import { scorePosition, calcAnnualizedYield } from '../scoring/engine';
 
 export interface ScanCandidate {
@@ -39,6 +40,11 @@ export async function scanForIdeas(
       currentTicker: ticker,
       message: `Scanning ${ticker} (${i + 1}/${total})`,
     });
+
+    // Pre-check cache for this ticker's required data
+    const putKey = chainCacheKey(ticker, { dte: targetDTE, side: 'put', strikeLimit: 20 });
+    const callKey = chainCacheKey(ticker, { dte: targetDTE, side: 'call', strikeLimit: 20 });
+    const allCached = hasQuoteCached(ticker) && hasChainCached(putKey) && hasChainCached(callKey);
 
     try {
       const quote = await getQuote(ticker, marketDataToken);
@@ -84,7 +90,7 @@ export async function scanForIdeas(
       // Skip tickers that fail
     }
 
-    if (i < universe.length - 1) {
+    if (!allCached && i < universe.length - 1) {
       await delay(SCAN_DELAY_MS);
     }
   }

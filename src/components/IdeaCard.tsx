@@ -23,50 +23,61 @@ const CONFIDENCE_STYLES = {
 export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreener, onDismiss }: Props) {
   const { position: p, score, thesis } = idea;
   const annYield = calcAnnualizedYield(p);
+  const otmSigned = p.currentPrice > 0
+    ? (p.strategy === 'CSP'
+        ? ((p.currentPrice - p.strikePrice) / p.currentPrice) * 100
+        : ((p.strikePrice - p.currentPrice) / p.currentPrice) * 100)
+    : 0;
 
   return (
-    <div className="border-b border-slate-700/50">
+    <>
       {/* Summary row */}
-      <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-700/20 transition-colors"
+      <tr
+        className="border-b border-slate-700/50 cursor-pointer hover:bg-slate-700/20 transition-colors"
         onClick={onToggle}
       >
-        <span className="text-xs text-slate-500 w-6 text-right font-mono">#{rank}</span>
+        <td className="px-2 py-2 text-right text-xs text-slate-500 font-mono">#{rank}</td>
+        <td className="px-1 py-2">
+          {expanded ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronRight className="h-4 w-4 text-slate-400" />}
+        </td>
+        <td className="px-2 py-2 text-center">
+          <span className={`inline-block text-base font-bold font-mono px-2 py-0.5 rounded border ${scoreColor(score.compositeScore)} ${scoreBgColor(score.compositeScore)}`}>
+            {score.compositeScore.toFixed(0)}
+          </span>
+        </td>
+        <td className="px-2 py-2 font-semibold text-white">{p.ticker}</td>
+        <td className="px-2 py-2 text-center">
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${p.strategy === 'CSP' ? 'bg-blue-900/50 text-blue-300' : 'bg-purple-900/50 text-purple-300'}`}>
+            {p.strategy}
+          </span>
+        </td>
+        <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatCurrency(p.strikePrice)}</td>
+        <td className="px-2 py-2 text-right">
+          <div className="text-xs text-slate-300 font-mono">{formatCurrency(p.currentPrice)}</div>
+          <div className="text-[10px] text-slate-500">
+            {otmSigned.toFixed(1)}% {p.strategy === 'CSP' ? 'below' : 'above'}
+          </div>
+        </td>
+        <td className="px-2 py-2 text-right text-xs text-emerald-400 font-mono">{formatPercent(annYield)}</td>
+        <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatDelta(p.delta)}</td>
+        <td className="px-2 py-2 text-right text-xs text-emerald-400 font-mono">{formatPSafe(p.delta)}</td>
+        <td className="px-2 py-2 text-right text-xs text-slate-300">{p.dte}d</td>
+        <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatIVRank(p.ivRank)}</td>
+        <td className="px-2 py-2 text-center">
+          <span className={`inline-block rounded border px-2 py-0.5 text-[10px] font-medium ${CONFIDENCE_STYLES[thesis.confidence]}`}>
+            {thesis.confidence}
+          </span>
+        </td>
+        <td className="px-2 py-2 text-xs text-slate-400 truncate">
+          <div className="truncate" title={thesis.summary}>{thesis.summary}</div>
+        </td>
+      </tr>
 
-        {expanded ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronRight className="h-4 w-4 text-slate-400" />}
-
-        <span className={`text-lg font-bold font-mono px-2 py-0.5 rounded border ${scoreColor(score.compositeScore)} ${scoreBgColor(score.compositeScore)}`}>
-          {score.compositeScore.toFixed(0)}
-        </span>
-
-        <span className="font-semibold text-white w-16">{p.ticker}</span>
-
-        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${p.strategy === 'CSP' ? 'bg-blue-900/50 text-blue-300' : 'bg-purple-900/50 text-purple-300'}`}>
-          {p.strategy}
-        </span>
-
-        <span className="text-xs text-slate-400 w-16">${p.strikePrice}</span>
-
-        <span className="text-xs text-emerald-400 w-16 font-mono">{formatPercent(annYield)}</span>
-
-        <span className="text-xs text-slate-300 w-12 font-mono">{formatDelta(p.delta)}</span>
-
-        <span className="text-xs text-slate-300 w-8">{p.dte}d</span>
-
-        <span className="text-xs text-slate-300 w-12">{formatIVRank(p.ivRank)}</span>
-
-        <span className={`ml-auto rounded border px-2 py-0.5 text-[10px] font-medium ${CONFIDENCE_STYLES[thesis.confidence]}`}>
-          {thesis.confidence}
-        </span>
-
-        <div className="flex-1 min-w-0 ml-2">
-          <p className="text-xs text-slate-400 truncate">{thesis.summary}</p>
-        </div>
-      </div>
-
-      {/* Expanded detail */}
+      {/* Expanded detail row */}
       {expanded && (
-        <div className="px-4 pb-4 bg-slate-900/50 border-t border-slate-700/30">
+        <tr className="border-b border-slate-700/50">
+          <td colSpan={14} className="p-0">
+            <div className="px-4 pb-4 bg-slate-900/50 border-t border-slate-700/30">
           <div className="grid gap-4 lg:grid-cols-[1fr_1fr] pt-4">
             {/* Left: Thesis */}
             <div className="space-y-4">
@@ -210,8 +221,10 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
               Generated {new Date(idea.generatedAt).toLocaleString()}
             </span>
           </div>
-        </div>
+            </div>
+          </td>
+        </tr>
       )}
-    </div>
+    </>
   );
 }
