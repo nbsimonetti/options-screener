@@ -51,7 +51,7 @@ export default function PayoffDiagram({ positions }: Props) {
     const cw = w - pad.left - pad.right;
     const ch = h - pad.top - pad.bottom;
 
-    const { prices, payoffs, minPnl, maxPnl, globalMin, globalMax } = chartInfo;
+    const { payoffs, minPnl, maxPnl, globalMin, globalMax } = chartInfo;
     const pnlRange = maxPnl - minPnl || 1;
     const pnlPad = pnlRange * 0.1;
     const yMin = minPnl - pnlPad;
@@ -146,7 +146,7 @@ export default function PayoffDiagram({ positions }: Props) {
     if (!chartInfo || !containerRef.current) return;
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const mx = e.clientX - rect.left;
-    const { prices, payoffs, globalMin, globalMax } = chartInfo;
+    const { prices, payoffs } = chartInfo;
     const pad = { left: 70, right: 20 };
     const cw = containerRef.current.clientWidth - pad.left - pad.right;
     const priceFrac = (mx - pad.left) / cw;

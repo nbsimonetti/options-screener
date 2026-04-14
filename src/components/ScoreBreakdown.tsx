@@ -36,7 +36,7 @@ export default function ScoreBreakdown({ positions, weights }: Props) {
 
   const radarData = scored[0].result.breakdown.map((b, i) => {
     const row: Record<string, string | number> = { metric: SHORT_LABELS[b.label] || b.label };
-    scored.forEach(({ pos, result }, j) => {
+    scored.forEach(({ pos, result }) => {
       row[`${pos.ticker} ${pos.strategy}`] = +result.breakdown[i].normalizedScore.toFixed(1);
     });
     return row;
