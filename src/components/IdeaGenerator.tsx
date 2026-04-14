@@ -8,7 +8,7 @@ import { generateTheses } from '../services/claude';
 import { calcAnnualizedYield } from '../scoring/engine';
 import IdeaCard from './IdeaCard';
 
-type SortKey = 'score' | 'ticker' | 'type' | 'strike' | 'price' | 'yield' | 'delta' | 'psafe' | 'dte' | 'ivr' | 'confidence';
+type SortKey = 'score' | 'ticker' | 'type' | 'strike' | 'price' | 'yield' | 'delta' | 'psafe' | 'dte' | 'expiry' | 'ivr' | 'confidence';
 
 const CONFIDENCE_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
 
@@ -23,6 +23,7 @@ function compareIdeas(a: InvestmentIdea, b: InvestmentIdea, key: SortKey): numbe
     case 'delta':      return Math.abs(a.position.delta) - Math.abs(b.position.delta);
     case 'psafe':      return (1 - Math.abs(a.position.delta)) - (1 - Math.abs(b.position.delta));
     case 'dte':        return a.position.dte - b.position.dte;
+    case 'expiry':     return a.position.dte - b.position.dte;
     case 'ivr':        return a.position.ivRank - b.position.ivRank;
     case 'confidence': return (CONFIDENCE_RANK[a.thesis.confidence] || 0) - (CONFIDENCE_RANK[b.thesis.confidence] || 0);
     default: return 0;
@@ -407,6 +408,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 <col className="w-16" />
                 <col className="w-16" />
                 <col className="w-12" />
+                <col className="w-24" />
                 <col className="w-14" />
                 <col className="w-16" />
                 <col />
@@ -424,6 +426,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                   <SortableTh sortKey="delta" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Absolute delta — lower = safer">Delta</SortableTh>
                   <SortableTh sortKey="psafe" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Probability option expires OTM (not assigned)">P(Safe)</SortableTh>
                   <SortableTh sortKey="dte" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">DTE</SortableTh>
+                  <SortableTh sortKey="expiry" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Expiry</SortableTh>
                   <SortableTh sortKey="ivr" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">IVR</SortableTh>
                   <SortableTh sortKey="confidence" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Conf.</SortableTh>
                   <th className="px-2 py-2 text-left">Summary</th>

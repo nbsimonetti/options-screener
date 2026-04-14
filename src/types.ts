@@ -10,6 +10,7 @@ export interface OptionPosition {
   bid: number;
   ask: number;
   dte: number;
+  expirationDate: string; // ISO "YYYY-MM-DD"
   delta: number;
   iv: number;
   ivRank: number;
@@ -132,6 +133,7 @@ export function createEmptyPosition(): OptionPosition {
     bid: 0,
     ask: 0,
     dte: 30,
+    expirationDate: '',
     delta: 0.3,
     iv: 0,
     ivRank: 50,

@@ -18,6 +18,7 @@ export function mdOptionToPosition(
     bid: opt.bid || 0,
     ask: opt.ask || 0,
     dte: opt.dte,
+    expirationDate: new Date(opt.expiration * 1000).toISOString().split('T')[0],
     delta: Math.abs(opt.delta || 0),
     iv: (opt.iv || 0) * 100,
     ivRank,

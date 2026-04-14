@@ -62,6 +62,7 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
         <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatDelta(p.delta)}</td>
         <td className="px-2 py-2 text-right text-xs text-emerald-400 font-mono">{formatPSafe(p.delta)}</td>
         <td className="px-2 py-2 text-right text-xs text-slate-300">{p.dte}d</td>
+        <td className="px-2 py-2 text-right text-xs text-slate-400 font-mono">{p.expirationDate || '—'}</td>
         <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatIVRank(p.ivRank)}</td>
         <td className="px-2 py-2 text-center">
           <span className={`inline-block rounded border px-2 py-0.5 text-[10px] font-medium ${CONFIDENCE_STYLES[thesis.confidence]}`}>
@@ -76,7 +77,7 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
       {/* Expanded detail row */}
       {expanded && (
         <tr className="border-b border-slate-700/50">
-          <td colSpan={14} className="p-0">
+          <td colSpan={15} className="p-0">
             <div className="px-4 pb-4 bg-slate-900/50 border-t border-slate-700/30">
           <div className="grid gap-4 lg:grid-cols-[1fr_1fr] pt-4">
             {/* Left: Thesis */}
@@ -167,6 +168,7 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
                   { label: 'P(Safe)', value: formatPSafe(p.delta) },
                   { label: 'IV Rank', value: formatIVRank(p.ivRank) },
                   { label: 'DTE', value: `${p.dte}d` },
+                  { label: 'Expires', value: p.expirationDate || '—' },
                   { label: 'Volume', value: p.volume.toLocaleString() },
                   { label: 'Open Int.', value: p.openInterest.toLocaleString() },
                 ].map((m) => (

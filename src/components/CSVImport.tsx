@@ -34,6 +34,10 @@ const COLUMN_MAP: Record<string, keyof OptionPosition> = {
   oi: 'openInterest',
   'earnings': 'nextEarningsDate',
   'next earnings': 'nextEarningsDate',
+  'expiration': 'expirationDate',
+  'expiry': 'expirationDate',
+  'exp date': 'expirationDate',
+  'expiration date': 'expirationDate',
 };
 
 function parseCSV(text: string): OptionPosition[] {
@@ -56,6 +60,7 @@ function parseCSV(text: string): OptionPosition[] {
       bid: 0,
       ask: 0,
       dte: 30,
+      expirationDate: '',
       delta: 0.3,
       iv: 0,
       ivRank: 50,
@@ -68,7 +73,7 @@ function parseCSV(text: string): OptionPosition[] {
     mapping.forEach((key, idx) => {
       if (!key || !values[idx]) return;
       const val = values[idx];
-      if (key === 'ticker' || key === 'nextEarningsDate') {
+      if (key === 'ticker' || key === 'nextEarningsDate' || key === 'expirationDate') {
         pos[key] = val;
       } else if (key === 'strategy') {
         pos[key] = val.toUpperCase().includes('CALL') || val.toUpperCase() === 'CC' ? 'CC' : 'CSP';
