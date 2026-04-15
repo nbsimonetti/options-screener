@@ -180,6 +180,7 @@ export interface ScanProgress {
 export const LS_IDEAS = 'options-screener-ideas';
 export const LS_WATCHLIST = 'options-screener-watchlist';
 export const LS_EXCLUDED = 'options-screener-excluded';
+export const LS_TABLE_SETS = 'options-screener-table-sets';
 
 export interface ScanFilter {
   minAnnualYield: number; // decimal, e.g. 0.10 = 10%

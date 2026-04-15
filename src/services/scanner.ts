@@ -15,6 +15,12 @@ export interface ScanCandidate {
   score: PositionScore;
 }
 
+export interface ScanResult {
+  top: ScanCandidate[];
+  bestCSPByTicker: ScanCandidate[];
+  bestCCByTicker: ScanCandidate[];
+}
+
 const SCAN_DELAY_MS = 700;
 const MAX_EXPIRATIONS_PER_TICKER = 3;
 const MAX_CANDIDATES_PER_TICKER = 2;
@@ -48,7 +54,7 @@ export async function scanForIdeas(
   onProgress: (progress: ScanProgress) => void,
   marketDataToken?: string,
   scanFilter: ScanFilter = DEFAULT_SCAN_FILTER,
-): Promise<ScanCandidate[]> {
+): Promise<ScanResult> {
   resetRequestCount();
   const all: ScanCandidate[] = [];
   const total = universe.length;
@@ -204,5 +210,28 @@ export async function scanForIdeas(
   );
 
   yieldFiltered.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
-  return yieldFiltered.slice(0, 15);
+  const top = yieldFiltered.slice(0, 15);
+
+  const bestCSPByTicker = new Map<string, ScanCandidate>();
+  const bestCCByTicker = new Map<string, ScanCandidate>();
+  for (const c of yieldFiltered) {
+    const ticker = c.position.ticker;
+    if (c.position.strategy === 'CSP') {
+      const existing = bestCSPByTicker.get(ticker);
+      if (!existing || c.score.compositeScore > existing.score.compositeScore) {
+        bestCSPByTicker.set(ticker, c);
+      }
+    } else {
+      const existing = bestCCByTicker.get(ticker);
+      if (!existing || c.score.compositeScore > existing.score.compositeScore) {
+        bestCCByTicker.set(ticker, c);
+      }
+    }
+  }
+
+  return {
+    top,
+    bestCSPByTicker: [...bestCSPByTicker.values()].sort((a, b) => b.score.compositeScore - a.score.compositeScore),
+    bestCCByTicker: [...bestCCByTicker.values()].sort((a, b) => b.score.compositeScore - a.score.compositeScore),
+  };
 }

@@ -1,9 +1,10 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter } from '../types';
-import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER } from '../types';
+import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER, LS_TABLE_SETS } from '../types';
 import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET } from '../services/universe';
 import { scanForIdeas } from '../services/scanner';
+import type { ScanCandidate } from '../services/scanner';
 import { generateTheses } from '../services/claude';
 import { getRequestCount } from '../services/marketdata';
 import { calcAnnualizedYield } from '../scoring/engine';
@@ -39,12 +40,29 @@ interface Props {
   onAddToScreener: (positions: OptionPosition[]) => void;
 }
 
+interface TableSets {
+  topIds: string[];
+  cspIds: string[];
+  ccIds: string[];
+}
+
+const EMPTY_TABLE_SETS: TableSets = { topIds: [], cspIds: [], ccIds: [] };
+
 function loadScanFilter(): ScanFilter {
   try {
     const stored = localStorage.getItem(LS_SCAN_FILTER);
     return stored ? { ...DEFAULT_SCAN_FILTER, ...JSON.parse(stored) } : DEFAULT_SCAN_FILTER;
   } catch {
     return DEFAULT_SCAN_FILTER;
+  }
+}
+
+function loadTableSets(): TableSets {
+  try {
+    const stored = localStorage.getItem(LS_TABLE_SETS);
+    return stored ? { ...EMPTY_TABLE_SETS, ...JSON.parse(stored) } : EMPTY_TABLE_SETS;
+  } catch {
+    return EMPTY_TABLE_SETS;
   }
 }
 
@@ -56,36 +74,40 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   const [error, setError] = useState('');
   const [watchlistState, setWatchlistState] = useState<string[]>(() => getWatchlist());
   const [excludedState, setExcludedState] = useState<string[]>(() => getExcluded());
-  const [sortKey, setSortKey] = useState<SortKey>('score');
-  const [sortAsc, setSortAsc] = useState(false);
-
-  const sortedIdeas = useMemo(() => {
-    const copy = [...ideas];
-    copy.sort((a, b) => {
-      const cmp = compareIdeas(a, b, sortKey);
-      return sortAsc ? cmp : -cmp;
-    });
-    return copy;
-  }, [ideas, sortKey, sortAsc]);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortKey(key);
-      setSortAsc(false);
-    }
-  };
+  const [tableSets, setTableSets] = useState<TableSets>(() => loadTableSets());
   const [scanFilter, setScanFilter] = useState<ScanFilter>(() => loadScanFilter());
 
   useEffect(() => {
     localStorage.setItem(LS_SCAN_FILTER, JSON.stringify(scanFilter));
   }, [scanFilter]);
 
+  useEffect(() => {
+    localStorage.setItem(LS_TABLE_SETS, JSON.stringify(tableSets));
+  }, [tableSets]);
+
   const hasClaude = ((apiConfig.claudeApiKey) || '').length > 0;
 
   const defaultTickers = getDefaultUniverse();
   const universe = getUniverse();
+
+  const ideaById = useMemo(() => new Map(ideas.map((i) => [i.position.id, i])), [ideas]);
+
+  const topIdeas = useMemo(() => {
+    if (tableSets.topIds.length === 0) return ideas; // backward-compat fallback
+    return tableSets.topIds
+      .map((id) => ideaById.get(id))
+      .filter((i): i is InvestmentIdea => !!i);
+  }, [ideaById, ideas, tableSets.topIds]);
+
+  const cspIdeas = useMemo(
+    () => tableSets.cspIds.map((id) => ideaById.get(id)).filter((i): i is InvestmentIdea => !!i),
+    [ideaById, tableSets.cspIds],
+  );
+
+  const ccIdeas = useMemo(
+    () => tableSets.ccIds.map((id) => ideaById.get(id)).filter((i): i is InvestmentIdea => !!i),
+    [ideaById, tableSets.ccIds],
+  );
 
   const runScan = useCallback(async () => {
     setError('');
@@ -93,23 +115,41 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
     try {
       setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting scan...', requestsUsed: 0, requestBudget: 2000 });
-      const candidates = await scanForIdeas(universe, weights, setProgress, apiConfig.marketDataToken || undefined, scanFilter);
+      const scanResult = await scanForIdeas(universe, weights, setProgress, apiConfig.marketDataToken || undefined, scanFilter);
       const usedNow = getRequestCount();
 
-      if (candidates.length === 0) {
+      // De-duplicate by position id across all three sets so Claude sees each candidate once
+      const seen = new Set<string>();
+      const allCandidates: ScanCandidate[] = [];
+      for (const c of [...scanResult.top, ...scanResult.bestCSPByTicker, ...scanResult.bestCCByTicker]) {
+        if (!seen.has(c.position.id)) {
+          seen.add(c.position.id);
+          allCandidates.push(c);
+        }
+      }
+
+      if (allCandidates.length === 0) {
         setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.', requestsUsed: usedNow, requestBudget: 2000 });
         return;
       }
 
       const analysisType = hasClaude ? 'Claude' : 'algorithmic analysis';
-      setProgress({ phase: 'analyzing', current: candidates.length, total: candidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...`, requestsUsed: usedNow, requestBudget: 2000 });
+      setProgress({ phase: 'analyzing', current: allCandidates.length, total: allCandidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...`, requestsUsed: usedNow, requestBudget: 2000 });
 
       const newIdeas = await generateTheses(
-        candidates,
+        allCandidates,
         hasClaude ? apiConfig.claudeApiKey : undefined,
       );
 
+      // Build the three id sets. InvestmentIdea.position.id matches ScanCandidate.position.id.
+      const newTableSets: TableSets = {
+        topIds: scanResult.top.map((c) => c.position.id),
+        cspIds: scanResult.bestCSPByTicker.map((c) => c.position.id),
+        ccIds: scanResult.bestCCByTicker.map((c) => c.position.id),
+      };
+
       onIdeasChange(newIdeas);
+      setTableSets(newTableSets);
       setProgress({ phase: 'complete', current: newIdeas.length, total: newIdeas.length, currentTicker: '', message: `${newIdeas.length} ideas generated · ${usedNow} API calls used`, requestsUsed: usedNow, requestBudget: 2000 });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Scan failed';
@@ -124,6 +164,10 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
   const handleDismiss = (id: string) => {
     onIdeasChange(ideas.filter((i) => i.id !== id));
+  };
+
+  const handleToggle = (id: string) => {
+    setExpandedId(expandedId === id ? null : id);
   };
 
   const handleAddWatchlistTicker = () => {
@@ -319,7 +363,6 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
               </button>
             </div>
 
-            {/* Active tickers */}
             <div className="mb-2">
               <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Scanning ({universe.length})</div>
               {universe.length > 0 ? (
@@ -353,7 +396,6 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
               )}
             </div>
 
-            {/* Excluded defaults */}
             {excludedState.length > 0 && (
               <div className="mb-2">
                 <div className="flex items-center justify-between mb-1">
@@ -385,7 +427,6 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
               </div>
             )}
 
-            {/* Bulk actions */}
             <div className="flex gap-3 pt-1">
               <button
                 onClick={handleClearCustom}
@@ -405,71 +446,46 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
         </div>
       )}
 
-      {/* Results table */}
+      {/* Results tables */}
       {ideas.length > 0 && (
-        <div className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden">
-          <div className="max-h-[600px] overflow-auto">
-            <table className="w-full text-sm table-fixed">
-              <colgroup>
-                <col className="w-10" />
-                <col className="w-8" />
-                <col className="w-16" />
-                <col className="w-20" />
-                <col className="w-14" />
-                <col className="w-24" />
-                <col className="w-24" />
-                <col className="w-20" />
-                <col className="w-16" />
-                <col className="w-16" />
-                <col className="w-12" />
-                <col className="w-24" />
-                <col className="w-14" />
-                <col className="w-16" />
-                <col />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-slate-800 border-b border-slate-700 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
-                <tr>
-                  <th className="px-2 py-2 text-right">#</th>
-                  <th></th>
-                  <SortableTh sortKey="score" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Score</SortableTh>
-                  <SortableTh sortKey="ticker" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="left">Ticker</SortableTh>
-                  <SortableTh sortKey="type" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Type</SortableTh>
-                  <SortableTh sortKey="strike" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Strike</SortableTh>
-                  <SortableTh sortKey="price" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Price</SortableTh>
-                  <SortableTh sortKey="yield" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Yield</SortableTh>
-                  <SortableTh sortKey="delta" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Absolute delta — lower = safer">Delta</SortableTh>
-                  <SortableTh sortKey="psafe" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Probability option expires OTM (not assigned)">P(Safe)</SortableTh>
-                  <SortableTh sortKey="dte" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">DTE</SortableTh>
-                  <SortableTh sortKey="expiry" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Expiry</SortableTh>
-                  <SortableTh sortKey="ivr" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">IVR</SortableTh>
-                  <SortableTh sortKey="confidence" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Conf.</SortableTh>
-                  <th className="px-2 py-2 text-left">Summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedIdeas.map((idea, i) => (
-                  <IdeaCard
-                    key={idea.id}
-                    idea={idea}
-                    rank={i + 1}
-                    expanded={expandedId === idea.id}
-                    onToggle={() => setExpandedId(expandedId === idea.id ? null : idea.id)}
-                    onAddToScreener={() => handleAddToScreener(idea)}
-                    onDismiss={() => handleDismiss(idea.id)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-4 py-2 border-t border-slate-700 bg-slate-800 flex items-center justify-between">
-            <span className="text-[10px] text-slate-500">{ideas.length} ideas</span>
-            {ideas.length > 0 && (
+        <>
+          <IdeaTable
+            ideas={topIdeas}
+            expandedId={expandedId}
+            onToggle={handleToggle}
+            onAddToScreener={handleAddToScreener}
+            onDismiss={handleDismiss}
+          />
+
+          <IdeaTable
+            title={`Top Cash-Secured Put Per Ticker (${cspIdeas.length})`}
+            ideas={cspIdeas}
+            expandedId={expandedId}
+            onToggle={handleToggle}
+            onAddToScreener={handleAddToScreener}
+            onDismiss={handleDismiss}
+          />
+
+          <IdeaTable
+            title={`Top Covered Call Per Ticker (${ccIdeas.length})`}
+            ideas={ccIdeas}
+            expandedId={expandedId}
+            onToggle={handleToggle}
+            onAddToScreener={handleAddToScreener}
+            onDismiss={handleDismiss}
+          />
+
+          <div className="px-4 py-2 rounded-lg border border-slate-700 bg-slate-800/50 flex items-center justify-between">
+            <span className="text-[10px] text-slate-500">
+              {ideas.length} total ideas &middot; {cspIdeas.length} CSPs &middot; {ccIdeas.length} CCs
+            </span>
+            {ideas[0]?.generatedAt && (
               <span className="text-[10px] text-slate-600">
                 Generated {new Date(ideas[0].generatedAt).toLocaleString()}
               </span>
             )}
           </div>
-        </div>
+        </>
       )}
 
       {ideas.length === 0 && progress.phase === 'idle' && (
@@ -479,6 +495,101 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
           <p className="text-xs text-slate-600 mt-1">Uses free MarketData.app data — no API key required for AAPL demo.</p>
         </div>
       )}
+    </div>
+  );
+}
+
+// --- IdeaTable subcomponent ---
+
+interface IdeaTableProps {
+  title?: string;
+  ideas: InvestmentIdea[];
+  expandedId: string | null;
+  onToggle: (id: string) => void;
+  onAddToScreener: (idea: InvestmentIdea) => void;
+  onDismiss: (id: string) => void;
+}
+
+function IdeaTable({ title, ideas, expandedId, onToggle, onAddToScreener, onDismiss }: IdeaTableProps) {
+  const [sortKey, setSortKey] = useState<SortKey>('score');
+  const [sortAsc, setSortAsc] = useState(false);
+
+  const sortedIdeas = useMemo(() => {
+    const copy = [...ideas];
+    copy.sort((a, b) => {
+      const cmp = compareIdeas(a, b, sortKey);
+      return sortAsc ? cmp : -cmp;
+    });
+    return copy;
+  }, [ideas, sortKey, sortAsc]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(false); }
+  };
+
+  if (ideas.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden">
+      {title && (
+        <div className="px-4 py-2 border-b border-slate-700 bg-slate-900/50">
+          <h3 className="text-sm font-semibold text-white">{title}</h3>
+        </div>
+      )}
+      <div className="max-h-[600px] overflow-auto">
+        <table className="w-full text-sm table-fixed">
+          <colgroup>
+            <col className="w-10" />
+            <col className="w-8" />
+            <col className="w-16" />
+            <col className="w-20" />
+            <col className="w-14" />
+            <col className="w-24" />
+            <col className="w-24" />
+            <col className="w-20" />
+            <col className="w-16" />
+            <col className="w-16" />
+            <col className="w-12" />
+            <col className="w-24" />
+            <col className="w-14" />
+            <col className="w-16" />
+            <col />
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-slate-800 border-b border-slate-700 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
+            <tr>
+              <th className="px-2 py-2 text-right">#</th>
+              <th></th>
+              <SortableTh sortKey="score" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Score</SortableTh>
+              <SortableTh sortKey="ticker" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="left">Ticker</SortableTh>
+              <SortableTh sortKey="type" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Type</SortableTh>
+              <SortableTh sortKey="strike" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Strike</SortableTh>
+              <SortableTh sortKey="price" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Price</SortableTh>
+              <SortableTh sortKey="yield" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Yield</SortableTh>
+              <SortableTh sortKey="delta" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Absolute delta — lower = safer">Delta</SortableTh>
+              <SortableTh sortKey="psafe" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Probability option expires OTM (not assigned)">P(Safe)</SortableTh>
+              <SortableTh sortKey="dte" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">DTE</SortableTh>
+              <SortableTh sortKey="expiry" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Expiry</SortableTh>
+              <SortableTh sortKey="ivr" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">IVR</SortableTh>
+              <SortableTh sortKey="confidence" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Conf.</SortableTh>
+              <th className="px-2 py-2 text-left">Summary</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedIdeas.map((idea, i) => (
+              <IdeaCard
+                key={idea.id}
+                idea={idea}
+                rank={i + 1}
+                expanded={expandedId === idea.id}
+                onToggle={() => onToggle(idea.id)}
+                onAddToScreener={() => onAddToScreener(idea)}
+                onDismiss={() => onDismiss(idea.id)}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
