@@ -146,7 +146,7 @@ export function createEmptyPosition(): OptionPosition {
 
 // --- AI Idea Generator ---
 
-export type AppView = 'screener' | 'ideas';
+export type AppView = 'screener' | 'ideas' | 'macro';
 
 export interface IdeaThesis {
   summary: string;

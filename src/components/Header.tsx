@@ -1,4 +1,4 @@
-import { TrendingUp, BarChart3, Sparkles } from 'lucide-react';
+import { TrendingUp, BarChart3, Sparkles, Gauge } from 'lucide-react';
 import type { AppView } from '../types';
 
 interface Props {
@@ -31,6 +31,9 @@ export default function Header({ activeView, onViewChange }: Props) {
           </button>
           <button className={tabClass('ideas')} onClick={() => onViewChange('ideas')}>
             <Sparkles className="h-4 w-4" /> Idea Generator
+          </button>
+          <button className={tabClass('macro')} onClick={() => onViewChange('macro')}>
+            <Gauge className="h-4 w-4" /> Options Macro Analysis
           </button>
         </nav>
       </div>

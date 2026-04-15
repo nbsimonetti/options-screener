@@ -11,6 +11,7 @@ import PositionTable from './PositionTable';
 import PayoffDiagram from './PayoffDiagram';
 import ScoreBreakdown from './ScoreBreakdown';
 import IdeaGenerator from './IdeaGenerator';
+import MacroAnalysis from './MacroAnalysis';
 
 const LS_POSITIONS = 'options-screener-positions';
 const LS_WEIGHTS = 'options-screener-weights';
@@ -195,7 +196,7 @@ export default function Dashboard() {
               <ScoreBreakdown positions={selectedPositions} weights={weights} />
             </div>
           </>
-        ) : (
+        ) : activeView === 'ideas' ? (
           <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
             <IdeaGenerator
               apiConfig={apiConfig}
@@ -209,6 +210,8 @@ export default function Dashboard() {
               <WeightSliders weights={weights} onChange={setWeights} />
             </div>
           </div>
+        ) : (
+          <MacroAnalysis />
         )}
       </div>
     </div>
