@@ -193,8 +193,8 @@ export default function Dashboard() {
       <div className="mx-auto max-w-[1400px] p-4 space-y-4">
         {activeView === 'screener' ? (
           <>
-            <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-              <div className="space-y-4">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="space-y-4 min-w-0">
                 <TickerLookup apiConfig={apiConfig} onImport={importPositions} />
                 <PositionEntry onAdd={addPosition} />
                 <CSVImport onImport={importPositions} />
@@ -217,14 +217,16 @@ export default function Dashboard() {
             </div>
           </>
         ) : activeView === 'ideas' ? (
-          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-            <IdeaGenerator
-              apiConfig={apiConfig}
-              weights={weights}
-              ideas={ideas}
-              onIdeasChange={setIdeas}
-              onAddToScreener={addFromIdeas}
-            />
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="min-w-0">
+              <IdeaGenerator
+                apiConfig={apiConfig}
+                weights={weights}
+                ideas={ideas}
+                onIdeasChange={setIdeas}
+                onAddToScreener={addFromIdeas}
+              />
+            </div>
             <div className="space-y-4">
               <DataSourceConfig config={apiConfig} onChange={setApiConfig} />
               <WeightSliders weights={weights} onChange={setWeights} />
