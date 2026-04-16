@@ -5,6 +5,7 @@ import {
   getQuote, getOptionChain, getExpirations,
   resetRequestCount, getRequestCount, BudgetExceededError, enforceBudget,
 } from './marketdata';
+import type { MDOption } from './marketdata';
 import { filterMDChain, mdChainToPositions } from './adapter';
 import { estimateIVRankFromChain, getCachedIVData, setCachedIVRank } from './ivRank';
 import { hasQuoteCached, hasChainCached, chainCacheKey, getCachedExpirations } from './marketdataCache';
@@ -23,7 +24,9 @@ export interface ScanResult {
 
 const SCAN_DELAY_MS = 700;
 const MAX_EXPIRATIONS_PER_TICKER = 3;
-const MAX_CANDIDATES_PER_TICKER = 2;
+// NOTE: per-ticker candidate cap is now implicit — 1 best CSP + 1 best CC
+// per ticker. Applying a combined cap made CSPs consistently evict CCs
+// in low-vol markets.
 const MAX_REQUESTS_PER_TICKER = 50;
 const MAX_TOTAL_REQUESTS = 2000;
 
@@ -130,11 +133,21 @@ export async function scanForIdeas(
       const maxExpirationsWeCanAfford = Math.max(1, Math.floor(remainingBudget / 2));
       const boundedExps = selectedExps.slice(0, maxExpirationsWeCanAfford);
 
+      // Use allSettled so a single failure (rate-limit, delisted, 4xx)
+      // doesn't wipe out the other strategies/expirations we fetched in
+      // parallel. Failed fetches produce empty chains; successful ones
+      // are processed normally.
       const fetchPromises = boundedExps.flatMap((exp) => [
         getOptionChain(ticker, marketDataToken, { expiration: exp, side: 'put', strikeLimit: 20 }),
         getOptionChain(ticker, marketDataToken, { expiration: exp, side: 'call', strikeLimit: 20 }),
       ]);
-      const results = await Promise.all(fetchPromises);
+      const settled = await Promise.allSettled(fetchPromises);
+      const results: MDOption[][] = settled.map((s) => s.status === 'fulfilled' ? s.value : []);
+
+      const failures = settled.filter((s) => s.status === 'rejected') as PromiseRejectedResult[];
+      if (failures.length > 0) {
+        console.debug(`[scanner:${ticker}] ${failures.length}/${settled.length} chain fetches failed:`, failures.map((f) => String(f.reason).substring(0, 100)));
+      }
 
       const chainsByExp = boundedExps.map((exp, idx) => ({
         expiration: exp,
@@ -189,8 +202,19 @@ export async function scanForIdeas(
         if (ccScored[0]) tickerCandidates.push(ccScored[0]);
       }
 
-      tickerCandidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
-      all.push(...tickerCandidates.slice(0, MAX_CANDIDATES_PER_TICKER));
+      // Keep the single best CSP and single best CC per ticker.
+      // Previously we took the top 2 by composite score globally across
+      // strategies for this ticker, which in low-vol uptrending markets
+      // almost always selected 2 CSPs and dropped CCs entirely — wiping
+      // out the CC-per-ticker downstream view.
+      const bestCSP = tickerCandidates
+        .filter((c) => c.position.strategy === 'CSP')
+        .sort((a, b) => b.score.compositeScore - a.score.compositeScore)[0];
+      const bestCC = tickerCandidates
+        .filter((c) => c.position.strategy === 'CC')
+        .sort((a, b) => b.score.compositeScore - a.score.compositeScore)[0];
+      if (bestCSP) all.push(bestCSP);
+      if (bestCC) all.push(bestCC);
     } catch (e) {
       if (e instanceof BudgetExceededError) {
         emit({
@@ -210,6 +234,20 @@ export async function scanForIdeas(
   }
 
   emit({ phase: 'scoring', current: total, message: 'Ranking candidates...' });
+
+  const allCSPCount = all.filter((c) => c.position.strategy === 'CSP').length;
+  const allCCCount = all.filter((c) => c.position.strategy === 'CC').length;
+  const uniqueTickers = new Set(all.map((c) => c.position.ticker));
+  console.debug('[scanner] post-loop pool:', {
+    tickersScanned: universe.length,
+    candidatesTotal: all.length,
+    csps: allCSPCount,
+    ccs: allCCCount,
+    uniqueTickers: uniqueTickers.size,
+    apiRequestsUsed: getRequestCount(),
+    budgetLimit: MAX_TOTAL_REQUESTS,
+    budgetExhausted: getRequestCount() >= MAX_TOTAL_REQUESTS,
+  });
 
   // Sort the full candidate pool once by composite score
   all.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
