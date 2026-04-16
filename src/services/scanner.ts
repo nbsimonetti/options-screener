@@ -211,16 +211,33 @@ export async function scanForIdeas(
 
   emit({ phase: 'scoring', current: total, message: 'Ranking candidates...' });
 
+  // Sort the full candidate pool once by composite score
+  all.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
+
+  // Top-15 table: prefer yield-filtered candidates, but backfill from the
+  // full pool if the user's yield threshold leaves us with fewer than 15
+  // so the "top 15 ideas" invariant always holds.
   const yieldFiltered = all.filter(
     (c) => calcAnnualizedYield(c.position) >= scanFilter.minAnnualYield,
   );
+  const top: ScanCandidate[] = [...yieldFiltered.slice(0, 15)];
+  if (top.length < 15) {
+    const topIds = new Set(top.map((c) => c.position.id));
+    for (const c of all) {
+      if (top.length >= 15) break;
+      if (!topIds.has(c.position.id)) {
+        top.push(c);
+        topIds.add(c.position.id);
+      }
+    }
+  }
 
-  yieldFiltered.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
-  const top = yieldFiltered.slice(0, 15);
-
+  // Per-ticker tables: iterate the FULL pool (not yield-filtered) so we
+  // always surface the best available CSP/CC per ticker regardless of
+  // the user's yield threshold, which is specific to the top table.
   const bestCSPByTicker = new Map<string, ScanCandidate>();
   const bestCCByTicker = new Map<string, ScanCandidate>();
-  for (const c of yieldFiltered) {
+  for (const c of all) {
     const ticker = c.position.ticker;
     if (c.position.strategy === 'CSP') {
       const existing = bestCSPByTicker.get(ticker);
