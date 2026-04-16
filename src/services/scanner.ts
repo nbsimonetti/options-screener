@@ -6,7 +6,7 @@ import {
   resetRequestCount, getRequestCount, BudgetExceededError, enforceBudget,
 } from './marketdata';
 import { filterMDChain, mdChainToPositions } from './adapter';
-import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from './ivRank';
+import { estimateIVRankFromChain, getCachedIVData, setCachedIVRank } from './ivRank';
 import { hasQuoteCached, hasChainCached, chainCacheKey, getCachedExpirations } from './marketdataCache';
 import { scorePosition, calcAnnualizedYield } from '../scoring/engine';
 
@@ -142,15 +142,21 @@ export async function scanForIdeas(
         calls: results[idx * 2 + 1],
       }));
 
-      let ivRank = getCachedIVRank(ticker);
+      const cachedIV = getCachedIVData(ticker);
+      let ivRank = cachedIV?.ivRank ?? null;
+      let atmIV = cachedIV?.atmIV;
+      let medianIV = cachedIV?.medianIV;
       if (ivRank === null) {
         const closest = [...chainsByExp].sort(
           (a, b) => Math.abs(dteFromDate(a.expiration) - midpointDTE) - Math.abs(dteFromDate(b.expiration) - midpointDTE),
         )[0];
         const blend = closest ? [...closest.puts, ...closest.calls] : [];
         if (blend.length > 0) {
-          ivRank = estimateIVRankFromChain(blend, price);
-          setCachedIVRank(ticker, ivRank);
+          const ivData = estimateIVRankFromChain(blend, price);
+          ivRank = ivData.ivRank;
+          atmIV = ivData.atmIV;
+          medianIV = ivData.medianIV;
+          setCachedIVRank(ticker, ivRank, atmIV, medianIV);
         } else {
           ivRank = 50;
         }
@@ -165,7 +171,7 @@ export async function scanForIdeas(
           minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
           minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
         });
-        const cspPositions = mdChainToPositions(cspFiltered, quote, 'CSP', ivRank, '');
+        const cspPositions = mdChainToPositions(cspFiltered, quote, 'CSP', ivRank, '', atmIV, medianIV);
         const cspScored = cspPositions
           .map((pos) => ({ position: pos, score: scorePosition(pos, weights) }))
           .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
@@ -176,7 +182,7 @@ export async function scanForIdeas(
           minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
           minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
         });
-        const ccPositions = mdChainToPositions(ccFiltered, quote, 'CC', ivRank, '');
+        const ccPositions = mdChainToPositions(ccFiltered, quote, 'CC', ivRank, '', atmIV, medianIV);
         const ccScored = ccPositions
           .map((pos) => ({ position: pos, score: scorePosition(pos, weights) }))
           .sort((a, b) => b.score.compositeScore - a.score.compositeScore);

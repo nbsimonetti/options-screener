@@ -12,11 +12,12 @@ export interface VolIndex {
   prevClose: number;
   change: number;
   changePct: number;
+  change5d?: number; // 5-day % change
   fiftyTwoWeekHigh: number;
   fiftyTwoWeekLow: number;
   rank: number; // 0-100 percentile of current within 52-week range
   asOf: string;
-  history?: number[]; // daily closes, oldest first
+  history?: number[]; // daily closes, last 60 days, oldest first
 }
 
 export interface IndexSnapshot {
@@ -24,12 +25,14 @@ export interface IndexSnapshot {
   level: number;
   change: number;
   changePct: number;
+  change5d?: number;
   ma50: number;
   ma200: number;
   aboveMA50: boolean;
   aboveMA200: boolean;
   distanceFromHigh: number; // negative number when below ATH (e.g., -3.2 means 3.2% below)
   asOf: string;
+  history?: number[]; // last 60 days
 }
 
 export interface MacroSnapshot {
@@ -43,8 +46,14 @@ export interface MacroSnapshot {
   creditSpread?: { hygPrice: number; lqdPrice: number; ratio: number; ratioTrend20d: number };
   yieldProxy?: { tltPrice: number; tltReturn20d: number };
   vrp?: { impliedVol: number; realizedVol20d: number; delta: number };
+  spyPrice?: number; // used to compute implied moves on macro tab
   dataSources: string[];
   failures: string[];
+}
+
+export function computeImpliedMoveSPY(spyPrice: number, vixLevel: number, days: number): number {
+  if (spyPrice <= 0 || vixLevel <= 0 || days <= 0) return 0;
+  return spyPrice * (vixLevel / 100) * Math.sqrt(days / 365);
 }
 
 // --- Cache ---
@@ -93,6 +102,31 @@ export function clearMacroCache() {
 }
 
 export const LS_MACRO_SNAPSHOT = 'options-screener-macro-snapshot';
+export const LS_COMPOSITE_HISTORY = 'options-screener-macro-composite-history';
+
+export interface CompositeHistoryEntry {
+  date: string; // YYYY-MM-DD
+  score: number;
+}
+
+export function loadCompositeHistory(): CompositeHistoryEntry[] {
+  try {
+    const s = localStorage.getItem(LS_COMPOSITE_HISTORY);
+    return s ? JSON.parse(s) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function recordCompositeScore(score: number) {
+  const today = new Date().toISOString().split('T')[0];
+  let list = loadCompositeHistory();
+  // Keep at most one entry per day; overwrite today's if it exists
+  list = list.filter((e) => e.date !== today);
+  list.push({ date: today, score });
+  list = list.slice(-30); // keep last 30 days
+  try { localStorage.setItem(LS_COMPOSITE_HISTORY, JSON.stringify(list)); } catch { /* ignore */ }
+}
 
 // --- Yahoo chart fetcher ---
 
@@ -172,18 +206,22 @@ function realizedVol(values: number[], window: number): number {
 
 async function buildVolIndex(symbol: string): Promise<VolIndex> {
   const r = await fetchYahooChart(symbol);
-  const history = closes(r);
+  const fullHistory = closes(r);
+  const history = fullHistory.slice(-60);
   const level = r.meta.regularMarketPrice;
   const prevClose = r.meta.chartPreviousClose;
   const high52 = r.meta.fiftyTwoWeekHigh;
   const low52 = r.meta.fiftyTwoWeekLow;
   const change = level - prevClose;
+  const close5dAgo = fullHistory.length >= 6 ? fullHistory[fullHistory.length - 6] : undefined;
+  const change5d = close5dAgo && close5dAgo > 0 ? ((level - close5dAgo) / close5dAgo) * 100 : undefined;
   return {
     symbol,
     level,
     prevClose,
     change,
     changePct: prevClose > 0 ? (change / prevClose) * 100 : 0,
+    change5d,
     fiftyTwoWeekHigh: high52,
     fiftyTwoWeekLow: low52,
     rank: percentileInRange(level, low52, high52),
@@ -195,24 +233,29 @@ async function buildVolIndex(symbol: string): Promise<VolIndex> {
 async function buildIndex(symbol: string): Promise<IndexSnapshot> {
   const r = await fetchYahooChart(symbol);
   const h = closes(r);
+  const history = h.slice(-60);
   const level = r.meta.regularMarketPrice;
   const prevClose = r.meta.chartPreviousClose;
   const ma50 = movingAverage(h, 50);
   const ma200 = movingAverage(h, 200);
   const high52 = r.meta.fiftyTwoWeekHigh;
   const change = level - prevClose;
+  const close5dAgo = h.length >= 6 ? h[h.length - 6] : undefined;
+  const change5d = close5dAgo && close5dAgo > 0 ? ((level - close5dAgo) / close5dAgo) * 100 : undefined;
 
   return {
     symbol,
     level,
     change,
     changePct: prevClose > 0 ? (change / prevClose) * 100 : 0,
+    change5d,
     ma50,
     ma200,
     aboveMA50: level > ma50,
     aboveMA200: level > ma200,
     distanceFromHigh: high52 > 0 ? ((level - high52) / high52) * 100 : 0,
     asOf: new Date(r.meta.regularMarketTime * 1000).toISOString(),
+    history,
   };
 }
 
@@ -279,13 +322,16 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
     };
   });
 
+  // SPY (for VRP + implied moves)
+  const spyChart = await safeRun('SPY', () => fetchYahooChart('SPY'));
+  const spyPrice = spyChart?.meta.regularMarketPrice;
+
   // VRP: implied (VIX) vs realized (SPY 20-day)
-  const vrp = await safeRun('VRP', async () => {
-    const spy = await fetchYahooChart('SPY');
-    const rv = realizedVol(closes(spy), 20);
-    const iv = vix?.level || 0;
-    return { impliedVol: iv, realizedVol20d: rv, delta: iv - rv };
-  });
+  const vrp = spyChart && vix ? {
+    impliedVol: vix.level,
+    realizedVol20d: realizedVol(closes(spyChart), 20),
+    delta: vix.level - realizedVol(closes(spyChart), 20),
+  } : undefined;
 
   return {
     fetchedAt: new Date().toISOString(),
@@ -298,6 +344,7 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
     creditSpread,
     yieldProxy,
     vrp,
+    spyPrice,
     dataSources: ['Yahoo Finance'],
     failures,
   };

@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Trash2, ChevronDown, ChevronRight, ArrowUpDown } from 'lucide-react';
 import type { OptionPosition, ScoringWeights } from '../types';
 import { scorePosition } from '../scoring/engine';
-import { formatCurrency, formatPercent, formatDelta, formatIVRank, formatPSafe, scoreColor, scoreBgColor } from '../utils/formatting';
+import { formatCurrency, formatPercent, formatDelta, formatIVRank, formatPSafe, scoreColor, scoreBgColor, yieldColor, deltaColor, ivrColor } from '../utils/formatting';
 import { calcAnnualizedYield } from '../scoring/engine';
-import { getBreakeven, getMaxProfit } from '../utils/payoff';
+import { getBreakeven, getMaxProfit, calcImpliedMove1SD, sigmaOTM } from '../utils/payoff';
 
 interface Props {
   positions: OptionPosition[];
@@ -57,8 +57,54 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
     );
   }
 
+  // Portfolio-level Greeks (selected positions only when there's a selection, otherwise all)
+  const portfolioPositions = selectedIds.size > 0
+    ? positions.filter((p) => selectedIds.has(p.id))
+    : positions;
+
+  // Selling a put → long delta (positive); selling a call → short delta (negative)
+  const portfolioDelta = portfolioPositions.reduce((s, p) => {
+    const sign = p.strategy === 'CSP' ? 1 : -1;
+    return s + sign * p.delta * p.contractSize;
+  }, 0);
+  // Option seller collects theta (display as positive dollars)
+  const portfolioTheta = portfolioPositions.reduce((s, p) => s + Math.abs(p.theta) * p.contractSize, 0);
+  // Sellers are short vega — show negative
+  const portfolioVega = portfolioPositions.reduce((s, p) => s - p.vega * p.contractSize, 0);
+  const portfolioCapital = portfolioPositions.reduce((s, p) => {
+    return s + (p.strategy === 'CSP' ? p.strikePrice : p.currentPrice) * p.contractSize;
+  }, 0);
+
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden">
+    <div className="space-y-2">
+      {/* Portfolio Greeks strip */}
+      <div className="rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2 flex items-center gap-6 text-xs flex-wrap">
+        <span className="text-[10px] text-slate-500 uppercase tracking-wider">
+          Portfolio {selectedIds.size > 0 ? `(${selectedIds.size} selected)` : `(${positions.length} total)`}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-slate-500">Δ</span>
+          <span className={`font-mono ${portfolioDelta >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {portfolioDelta >= 0 ? '+' : ''}{portfolioDelta.toFixed(0)}
+          </span>
+        </span>
+        <span className="flex items-center gap-1.5" title="Total theta earned per day across positions">
+          <span className="text-slate-500">Θ/day</span>
+          <span className="font-mono text-green-400">{formatCurrency(portfolioTheta)}</span>
+        </span>
+        <span className="flex items-center gap-1.5" title="Vega exposure — dollar P&L per 1-point IV change (short vega is negative)">
+          <span className="text-slate-500">ν</span>
+          <span className={`font-mono ${portfolioVega < 0 ? 'text-red-400' : 'text-green-400'}`}>
+            {formatCurrency(portfolioVega)}
+          </span>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-slate-500">Capital at risk</span>
+          <span className="font-mono text-white">{formatCurrency(portfolioCapital)}</span>
+        </span>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden">
       <div className="overflow-auto max-h-[500px]">
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 shadow-sm">
@@ -72,6 +118,8 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
               </th>
               <th className={thClass} onClick={() => toggleSort('strategy')}>Type</th>
               <th className={thClass}>Strike</th>
+              <th className={thClass} title="1-SD expected move through expiration (price × IV × √(DTE/365)). The 'σ' row below shows strike's distance in standard deviations.">Exp. Move</th>
+              <th className={thClass} title="Capital at risk in dollars (strike × 100 for CSPs, stock price × 100 for CCs)">Capital</th>
               <th className={thClass} onClick={() => toggleSort('premium')}>
                 <span className="flex items-center gap-1">Premium <ArrowUpDown className="h-3 w-3" /></span>
               </th>
@@ -82,10 +130,12 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
                 <span className="flex items-center gap-1" title="Absolute delta — lower = safer">Delta <ArrowUpDown className="h-3 w-3" /></span>
               </th>
               <th className={thClass} onClick={() => toggleSort('delta')}>
-                <span className="flex items-center gap-1" title="Probability option expires OTM (not assigned)">P(Safe) <ArrowUpDown className="h-3 w-3" /></span>
+                <span className="flex items-center gap-1" title="1 − |delta|, a Black-Scholes approximation of probability OTM at expiration, not true probability">P(Safe) <ArrowUpDown className="h-3 w-3" /></span>
               </th>
+              <th className={thClass} title="Theta in dollars per day — expected P&L per day if nothing moves">Θ/day</th>
+              <th className={thClass} title="Vega × 100 — dollar P&L per 1-point change in implied volatility">Vega</th>
               <th className={thClass} onClick={() => toggleSort('dte')}>DTE</th>
-              <th className={thClass} onClick={() => toggleSort('ivRank')}>IVR</th>
+              <th className={thClass} onClick={() => toggleSort('ivRank')} title="IV Rank: current IV as percentile within the last year's range for this ticker">IVR</th>
               <th className={thClass}>Breakeven</th>
               <th className={thClass}>Max Profit</th>
               <th className="px-3 py-2 w-16"></th>
@@ -122,12 +172,19 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
                     </span>
                   </td>
                   <td className="px-3 py-2 text-slate-300">{formatCurrency(pos.strikePrice)}</td>
+                  <td className="px-3 py-2 text-slate-300 font-mono">
+                    <div>±{formatCurrency(calcImpliedMove1SD(pos))}</div>
+                    <div className="text-[10px] text-slate-500">{sigmaOTM(pos).toFixed(2)}σ OTM</div>
+                  </td>
+                  <td className="px-3 py-2 text-slate-300 font-mono">{formatCurrency((pos.strategy === 'CSP' ? pos.strikePrice : pos.currentPrice) * pos.contractSize)}</td>
                   <td className="px-3 py-2 text-emerald-400">{formatCurrency(pos.premium)}</td>
-                  <td className="px-3 py-2 text-slate-300">{formatPercent(annualYield)}</td>
-                  <td className="px-3 py-2 text-slate-300">{formatDelta(pos.delta)}</td>
+                  <td className={`px-3 py-2 font-mono ${yieldColor(annualYield)}`}>{formatPercent(annualYield)}</td>
+                  <td className={`px-3 py-2 font-mono ${deltaColor(pos.delta)}`}>{formatDelta(pos.delta)}</td>
                   <td className="px-3 py-2 text-emerald-400 font-mono">{formatPSafe(pos.delta)}</td>
+                  <td className={`px-3 py-2 font-mono ${pos.theta < 0 ? 'text-green-400' : 'text-slate-400'}`}>{formatCurrency(Math.abs(pos.theta) * pos.contractSize)}</td>
+                  <td className="px-3 py-2 text-slate-300 font-mono">{formatCurrency(pos.vega * pos.contractSize)}</td>
                   <td className="px-3 py-2 text-slate-300">{pos.dte}d</td>
-                  <td className="px-3 py-2 text-slate-300">{formatIVRank(pos.ivRank)}</td>
+                  <td className={`px-3 py-2 font-mono ${ivrColor(pos.ivRank)}`} title="IV Rank: current IV as percentile within the last year's range for this ticker">{formatIVRank(pos.ivRank)}</td>
                   <td className="px-3 py-2 text-slate-300">{formatCurrency(getBreakeven(pos))}</td>
                   <td className="px-3 py-2 text-emerald-400">{formatCurrency(getMaxProfit(pos))}</td>
                   <td className="px-3 py-2">
@@ -173,6 +230,7 @@ export default function PositionTable({ positions, weights, selectedIds, onToggl
           </div>
         );
       })()}
+      </div>
     </div>
   );
 }

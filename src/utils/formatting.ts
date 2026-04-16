@@ -41,3 +41,32 @@ export function scoreBgColor(score: number): string {
   if (score >= 40) return 'bg-yellow-900/30 border-yellow-700/50';
   return 'bg-red-900/30 border-red-700/50';
 }
+
+// Color helpers for table cells — consistent across the app
+export function yieldColor(annualYield: number): string {
+  // annualYield is decimal (0.25 = 25%)
+  if (annualYield > 0.25) return 'text-green-400';
+  if (annualYield > 0.12) return 'text-yellow-400';
+  return 'text-red-400';
+}
+
+export function deltaColor(delta: number): string {
+  const abs = Math.abs(delta);
+  if (abs < 0.20) return 'text-green-400';
+  if (abs < 0.32) return 'text-yellow-400';
+  return 'text-red-400';
+}
+
+export function ivrColor(ivRank: number): string {
+  if (ivRank > 90) return 'text-red-400';      // crisis — too elevated
+  if (ivRank >= 40) return 'text-green-400';   // sweet spot for premium sellers
+  if (ivRank >= 25) return 'text-yellow-400';
+  return 'text-red-400';                        // compressed — premium is cheap
+}
+
+export function spreadColor(spreadPct: number): string {
+  // spreadPct as decimal (0.05 = 5%)
+  if (spreadPct < 0.02) return 'text-green-400';
+  if (spreadPct < 0.05) return 'text-yellow-400';
+  return 'text-red-400';
+}

@@ -7,21 +7,37 @@ export function mdOptionToPosition(
   strategy: StrategyType,
   ivRank: number,
   earningsDate: string,
+  atmIV?: number,
+  medianIV?: number,
 ): OptionPosition {
+  const currentPrice = quote.last || quote.mid || 0;
+  const premium = +(opt.mid || opt.last || 0).toFixed(2);
+  const intrinsic = strategy === 'CSP'
+    ? Math.max(0, opt.strike - currentPrice)
+    : Math.max(0, currentPrice - opt.strike);
+  const extrinsic = Math.max(0, premium - intrinsic);
+
   return {
     id: crypto.randomUUID(),
     ticker: quote.symbol,
     strategy,
-    currentPrice: quote.last || quote.mid || 0,
+    currentPrice,
     strikePrice: opt.strike,
-    premium: +(opt.mid || opt.last || 0).toFixed(2),
+    premium,
     bid: opt.bid || 0,
     ask: opt.ask || 0,
     dte: opt.dte,
     expirationDate: new Date(opt.expiration * 1000).toISOString().split('T')[0],
     delta: Math.abs(opt.delta || 0),
+    theta: opt.theta || 0,
+    vega: opt.vega || 0,
+    gamma: opt.gamma || 0,
     iv: (opt.iv || 0) * 100,
     ivRank,
+    atmIV,
+    medianIV,
+    extrinsicValue: +extrinsic.toFixed(2),
+    intrinsicValue: +intrinsic.toFixed(2),
     volume: opt.volume || 0,
     openInterest: opt.openInterest || 0,
     nextEarningsDate: earningsDate,
@@ -74,6 +90,8 @@ export function mdChainToPositions(
   strategy: StrategyType,
   ivRank: number,
   earningsDate: string,
+  atmIV?: number,
+  medianIV?: number,
 ): OptionPosition[] {
-  return chain.map((opt) => mdOptionToPosition(opt, quote, strategy, ivRank, earningsDate));
+  return chain.map((opt) => mdOptionToPosition(opt, quote, strategy, ivRank, earningsDate, atmIV, medianIV));
 }

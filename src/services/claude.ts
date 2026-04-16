@@ -56,6 +56,7 @@ function formatCandidateForPrompt(c: ScanCandidate, index: number): string {
 #${index + 1}: ${p.ticker} — ${p.strategy === 'CSP' ? 'Cash Secured Put' : 'Covered Call'}
   Strike: $${p.strikePrice} | Current Price: $${p.currentPrice} | Premium: $${p.premium}
   DTE: ${p.dte} days | Delta: ${p.delta.toFixed(2)} | IV: ${p.iv.toFixed(1)}% | IV Rank: ${p.ivRank.toFixed(1)}
+  Theta: $${(Math.abs(p.theta) * p.contractSize).toFixed(2)}/day | Vega: $${(p.vega * p.contractSize).toFixed(2)} per 1-pt IV | Extrinsic: $${(p.extrinsicValue * p.contractSize).toFixed(2)}
   Annualized Yield: ${(annYield * 100).toFixed(1)}% | Breakeven: $${breakeven.toFixed(2)}
   Volume: ${p.volume} | Open Interest: ${p.openInterest} | Bid-Ask Spread: ${spreadPct.toFixed(1)}%
   Earnings: ${p.nextEarningsDate || 'Not within DTE window'}

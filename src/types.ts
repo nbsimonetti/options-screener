@@ -12,8 +12,15 @@ export interface OptionPosition {
   dte: number;
   expirationDate: string; // ISO "YYYY-MM-DD"
   delta: number;
+  theta: number;           // per-share theta (negative for long options)
+  vega: number;            // per-share vega
+  gamma: number;           // per-share gamma
   iv: number;
   ivRank: number;
+  atmIV?: number;          // ticker's current ATM implied vol, % — optional
+  medianIV?: number;       // ticker's median chain IV, % — baseline for comparison
+  extrinsicValue: number;  // time premium $ per share
+  intrinsicValue: number;  // in-the-money $ per share
   volume: number;
   openInterest: number;
   nextEarningsDate: string;
@@ -135,8 +142,13 @@ export function createEmptyPosition(): OptionPosition {
     dte: 30,
     expirationDate: '',
     delta: 0.3,
+    theta: 0,
+    vega: 0,
+    gamma: 0,
     iv: 0,
     ivRank: 50,
+    extrinsicValue: 0,
+    intrinsicValue: 0,
     volume: 0,
     openInterest: 0,
     nextEarningsDate: '',

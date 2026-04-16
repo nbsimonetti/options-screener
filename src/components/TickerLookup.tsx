@@ -4,9 +4,9 @@ import type { APIConfig, OptionPosition, ChainFilter, StrategyType } from '../ty
 import { DEFAULT_CHAIN_FILTER } from '../types';
 import { getQuote, getOptionChain } from '../services/marketdata';
 import type { MDQuote, MDOption } from '../services/marketdata';
-import { estimateIVRankFromChain, getCachedIVRank, setCachedIVRank } from '../services/ivRank';
+import { estimateIVRankFromChain, getCachedIVData, setCachedIVRank } from '../services/ivRank';
 import { filterMDChain, mdChainToPositions } from '../services/adapter';
-import { formatCurrency, formatPercent, formatDelta, formatIVRank } from '../utils/formatting';
+import { formatCurrency, formatPercent, formatDelta, formatIVRank, deltaColor } from '../utils/formatting';
 
 interface Props {
   apiConfig: APIConfig;
@@ -24,6 +24,8 @@ export default function TickerLookup({ apiConfig, onImport }: Props) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
   const [ivRank, setIvRank] = useState(50);
+  const [atmIV, setAtmIV] = useState<number | undefined>(undefined);
+  const [medianIV, setMedianIV] = useState<number | undefined>(undefined);
   const [chainExpiration, setChainExpiration] = useState('');
 
   const token = apiConfig.marketDataToken || undefined;
@@ -62,12 +64,24 @@ export default function TickerLookup({ apiConfig, onImport }: Props) {
       }
 
       const price = q.last || q.mid || 0;
-      let rank = getCachedIVRank(ticker);
-      if (rank === null) {
-        rank = estimateIVRankFromChain(rawChain, price);
-        setCachedIVRank(ticker, rank);
+      const cached = getCachedIVData(ticker);
+      let rank: number;
+      let atmIV: number | undefined;
+      let medianIV: number | undefined;
+      if (cached) {
+        rank = cached.ivRank;
+        atmIV = cached.atmIV;
+        medianIV = cached.medianIV;
+      } else {
+        const ivData = estimateIVRankFromChain(rawChain, price);
+        rank = ivData.ivRank;
+        atmIV = ivData.atmIV;
+        medianIV = ivData.medianIV;
+        setCachedIVRank(ticker, rank, atmIV, medianIV);
       }
       setIvRank(rank);
+      setAtmIV(atmIV);
+      setMedianIV(medianIV);
 
       const filtered = filterMDChain(rawChain, q, filter);
       setFilteredChain(filtered);
@@ -110,7 +124,7 @@ export default function TickerLookup({ apiConfig, onImport }: Props) {
   const addSelected = () => {
     if (!quote || selected.size === 0) return;
     const selectedOptions = filteredChain.filter((_, i) => selected.has(i));
-    const positions = mdChainToPositions(selectedOptions, quote, filter.strategy, ivRank, '');
+    const positions = mdChainToPositions(selectedOptions, quote, filter.strategy, ivRank, '', atmIV, medianIV);
     onImport(positions);
     setSelected(new Set());
   };
@@ -239,7 +253,7 @@ export default function TickerLookup({ apiConfig, onImport }: Props) {
                       <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{formatCurrency(opt.bid)}</td>
                       <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{formatCurrency(opt.ask)}</td>
                       <td className="px-2 py-1.5 text-right text-emerald-400 font-mono">{formatCurrency(opt.mid)}</td>
-                      <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{formatDelta(Math.abs(opt.delta))}</td>
+                      <td className={`px-2 py-1.5 text-right font-mono ${deltaColor(opt.delta)}`}>{formatDelta(Math.abs(opt.delta))}</td>
                       <td className="px-2 py-1.5 text-right text-slate-300 font-mono">{(opt.iv * 100).toFixed(1)}%</td>
                       <td className="px-2 py-1.5 text-right text-slate-400">{(opt.volume || 0).toLocaleString()}</td>
                       <td className="px-2 py-1.5 text-right text-slate-400">{(opt.openInterest || 0).toLocaleString()}</td>

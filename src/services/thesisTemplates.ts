@@ -3,6 +3,7 @@ import type { ScanCandidate } from './scanner';
 import { calcAnnualizedYield } from '../scoring/engine';
 import { getBreakeven } from '../utils/payoff';
 import { formatCurrency, formatPercent, formatDelta, formatIVRank } from '../utils/formatting';
+import { calcImpliedMove1SD, sigmaOTM } from '../utils/payoff';
 
 type Tier = 'strong' | 'neutral' | 'weak';
 
@@ -55,12 +56,15 @@ function deltaObs(p: OptionPosition, b: ScoreBreakdownItem): string {
 
 function ivRankObs(p: OptionPosition, b: ScoreBreakdownItem): string {
   const t = tier(b.normalizedScore);
+  const baseline = p.atmIV != null && p.medianIV != null
+    ? ` (current IV ${p.atmIV.toFixed(1)}% vs chain median ${p.medianIV.toFixed(1)}%${p.atmIV > p.medianIV ? ', +' + (p.atmIV - p.medianIV).toFixed(1) + 'pts elevated' : ''})`
+    : '';
   if (t === 'strong') {
-    return `IV Rank of ${formatIVRank(p.ivRank)} means current volatility is in the ${formatIVRank(p.ivRank)} percentile of its range — selling premium at an elevated level.`;
+    return `IV Rank of ${formatIVRank(p.ivRank)} means current volatility is in the ${formatIVRank(p.ivRank)} percentile of its range${baseline} — selling premium at an elevated level.`;
   } else if (t === 'neutral') {
-    return `IV Rank of ${formatIVRank(p.ivRank)} is mid-range — premium is neither rich nor cheap relative to historical norms.`;
+    return `IV Rank of ${formatIVRank(p.ivRank)} is mid-range${baseline} — premium is neither rich nor cheap relative to historical norms.`;
   }
-  return `IV Rank of ${formatIVRank(p.ivRank)} suggests volatility is compressed — premium may be cheap relative to potential moves.`;
+  return `IV Rank of ${formatIVRank(p.ivRank)} suggests volatility is compressed${baseline} — premium may be cheap relative to potential moves.`;
 }
 
 function liquidityObs(p: OptionPosition, b: ScoreBreakdownItem): string {
@@ -156,7 +160,11 @@ function buildThesis(candidate: ScanCandidate): IdeaThesis {
 
   // Rationale: yield math + delta probability
   const capital = p.strategy === 'CSP' ? p.strikePrice * p.contractSize : p.currentPrice * p.contractSize;
-  const rationale = `At ${formatCurrency(p.premium)} premium on a $${p.strikePrice} strike (${p.dte} DTE), the annualized return on the ${formatCurrency(capital)} capital commitment is ${formatPercent(annYield)}. Delta of ${formatDelta(p.delta)} gives this trade an estimated ${probOTM(p.delta)}% probability of full profit. Breakeven at ${formatCurrency(breakeven)}.`;
+  const thetaPerDay = Math.abs(p.theta) * p.contractSize;
+  const vegaDollar = p.vega * p.contractSize;
+  const move1SD = calcImpliedMove1SD(p);
+  const sigma = sigmaOTM(p);
+  const rationale = `At ${formatCurrency(p.premium)} premium on a $${p.strikePrice} strike (${p.dte} DTE), the annualized return on the ${formatCurrency(capital)} capital commitment is ${formatPercent(annYield)}. Market's 1-SD expected move is ±${formatCurrency(move1SD)}; strike sits ${sigma.toFixed(2)}σ ${p.strategy === 'CSP' ? 'below' : 'above'} spot. Delta of ${formatDelta(p.delta)} gives this trade an estimated ${probOTM(p.delta)}% probability of full profit. Theta decay earns ${formatCurrency(thetaPerDay)}/day and the position is short ${formatCurrency(vegaDollar)} per 1-point IV rise. Breakeven at ${formatCurrency(breakeven)}.`;
 
   // Key Metrics: top 3 by weighted contribution with full math
   const keyMetrics = `Top contributors: ${topContributors.map((c) => `${c.label} ${c.normalizedScore.toFixed(0)}/100 (wt ${c.weight} → ${c.weightedScore.toFixed(0)})`).join(', ')}. Composite: ${score.compositeScore.toFixed(1)}/100.`;

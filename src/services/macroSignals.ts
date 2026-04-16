@@ -76,9 +76,9 @@ function skewSignal(snap: MacroSnapshot): SignalResult | null {
   const skew = snap.skew.level;
   // Inverted bell: 120-130 = best (score 100), 145+ = weak, <115 = neutral
   let score: number;
-  if (skew < 115) score = 55;
-  else if (skew < 125) score = 75;
-  else if (skew < 140) score = 55;
+  if (skew < 115) score = 60;
+  else if (skew < 125) score = 100;
+  else if (skew < 140) score = 65;
   else if (skew < 150) score = 35;
   else score = 20;
   const tier = tierOf(score);

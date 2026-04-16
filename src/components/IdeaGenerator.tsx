@@ -547,9 +547,13 @@ function IdeaTable({ title, ideas, expandedId, onToggle, onAddToScreener, onDism
             <col className="w-14" />
             <col className="w-24" />
             <col className="w-24" />
+            <col className="w-24" />
+            <col className="w-24" />
             <col className="w-20" />
             <col className="w-16" />
             <col className="w-16" />
+            <col className="w-20" />
+            <col className="w-20" />
             <col className="w-12" />
             <col className="w-24" />
             <col className="w-14" />
@@ -565,9 +569,13 @@ function IdeaTable({ title, ideas, expandedId, onToggle, onAddToScreener, onDism
               <SortableTh sortKey="type" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="center">Type</SortableTh>
               <SortableTh sortKey="strike" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Strike</SortableTh>
               <SortableTh sortKey="price" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Price</SortableTh>
+              <th className="px-2 py-2 text-right" title="1-SD expected move through expiration">Exp. Move</th>
+              <th className="px-2 py-2 text-right" title="Capital at risk in $ (strike × 100 for CSPs, stock price × 100 for CCs)">Capital</th>
               <SortableTh sortKey="yield" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Yield</SortableTh>
               <SortableTh sortKey="delta" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Absolute delta — lower = safer">Delta</SortableTh>
-              <SortableTh sortKey="psafe" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="Probability option expires OTM (not assigned)">P(Safe)</SortableTh>
+              <SortableTh sortKey="psafe" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right" title="1 − |delta|, a Black-Scholes approximation of probability OTM at expiration, not true probability">P(Safe)</SortableTh>
+              <th className="px-2 py-2 text-right" title="Theta in $/day — expected P&L per day if nothing moves">Θ/day</th>
+              <th className="px-2 py-2 text-right" title="Vega × 100 — dollar P&L per 1-point change in implied volatility">Vega</th>
               <SortableTh sortKey="dte" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">DTE</SortableTh>
               <SortableTh sortKey="expiry" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">Expiry</SortableTh>
               <SortableTh sortKey="ivr" currentKey={sortKey} asc={sortAsc} onSort={toggleSort} align="right">IVR</SortableTh>

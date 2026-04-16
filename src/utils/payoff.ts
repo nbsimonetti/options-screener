@@ -49,6 +49,29 @@ export function getMaxLoss(pos: OptionPosition): number {
   return Infinity;
 }
 
+/**
+ * 1-standard-deviation expected price movement through expiration, in $.
+ * Formula: currentPrice × (IV / 100) × sqrt(DTE / 365)
+ */
+export function calcImpliedMove1SD(pos: OptionPosition): number {
+  if (pos.dte <= 0 || pos.iv <= 0 || pos.currentPrice <= 0) return 0;
+  const ivDecimal = pos.iv / 100;
+  return pos.currentPrice * ivDecimal * Math.sqrt(pos.dte / 365);
+}
+
+/**
+ * Number of standard deviations the strike is away from current price.
+ * Positive when OTM, negative when ITM. Uses 1-SD expected move as the unit.
+ */
+export function sigmaOTM(pos: OptionPosition): number {
+  const move1SD = calcImpliedMove1SD(pos);
+  if (move1SD <= 0) return 0;
+  const distance = pos.strategy === 'CSP'
+    ? pos.currentPrice - pos.strikePrice
+    : pos.strikePrice - pos.currentPrice;
+  return distance / move1SD;
+}
+
 export function generatePriceRange(pos: OptionPosition, steps: number = 200): number[] {
   const center = pos.strategy === 'CSP' ? pos.strikePrice : pos.currentPrice;
   const range = center * 0.35;

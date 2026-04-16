@@ -38,6 +38,13 @@ const COLUMN_MAP: Record<string, keyof OptionPosition> = {
   'expiry': 'expirationDate',
   'exp date': 'expirationDate',
   'expiration date': 'expirationDate',
+  'theta': 'theta',
+  'vega': 'vega',
+  'gamma': 'gamma',
+  'extrinsic': 'extrinsicValue',
+  'extrinsic value': 'extrinsicValue',
+  'intrinsic': 'intrinsicValue',
+  'intrinsic value': 'intrinsicValue',
 };
 
 function parseCSV(text: string): OptionPosition[] {
@@ -62,8 +69,13 @@ function parseCSV(text: string): OptionPosition[] {
       dte: 30,
       expirationDate: '',
       delta: 0.3,
+      theta: 0,
+      vega: 0,
+      gamma: 0,
       iv: 0,
       ivRank: 50,
+      extrinsicValue: 0,
+      intrinsicValue: 0,
       volume: 0,
       openInterest: 0,
       nextEarningsDate: '',

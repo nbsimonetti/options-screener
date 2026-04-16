@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronRight, Plus, X, Shield, AlertTriangle, TrendingUp, MessageSquare } from 'lucide-react';
 import type { InvestmentIdea } from '../types';
-import { formatCurrency, formatPercent, formatDelta, formatIVRank, formatPSafe, scoreColor, scoreBgColor } from '../utils/formatting';
+import { formatCurrency, formatPercent, formatDelta, formatIVRank, formatPSafe, scoreColor, scoreBgColor, yieldColor, deltaColor, ivrColor } from '../utils/formatting';
 import { calcAnnualizedYield } from '../scoring/engine';
-import { getBreakeven, getMaxProfit } from '../utils/payoff';
+import { getBreakeven, getMaxProfit, calcImpliedMove1SD, sigmaOTM } from '../utils/payoff';
 import PayoffDiagram from './PayoffDiagram';
 
 interface Props {
@@ -58,12 +58,19 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
             {otmSigned.toFixed(1)}% {p.strategy === 'CSP' ? 'below' : 'above'}
           </div>
         </td>
-        <td className="px-2 py-2 text-right text-xs text-emerald-400 font-mono">{formatPercent(annYield)}</td>
-        <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatDelta(p.delta)}</td>
+        <td className="px-2 py-2 text-right">
+          <div className="text-xs text-slate-300 font-mono">±{formatCurrency(calcImpliedMove1SD(p))}</div>
+          <div className="text-[10px] text-slate-500">{sigmaOTM(p).toFixed(2)}σ OTM</div>
+        </td>
+        <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatCurrency((p.strategy === 'CSP' ? p.strikePrice : p.currentPrice) * p.contractSize)}</td>
+        <td className={`px-2 py-2 text-right text-xs font-mono ${yieldColor(annYield)}`}>{formatPercent(annYield)}</td>
+        <td className={`px-2 py-2 text-right text-xs font-mono ${deltaColor(p.delta)}`}>{formatDelta(p.delta)}</td>
         <td className="px-2 py-2 text-right text-xs text-emerald-400 font-mono">{formatPSafe(p.delta)}</td>
+        <td className={`px-2 py-2 text-right text-xs font-mono ${p.theta < 0 ? 'text-green-400' : 'text-slate-400'}`}>{formatCurrency(Math.abs(p.theta) * p.contractSize)}</td>
+        <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatCurrency(p.vega * p.contractSize)}</td>
         <td className="px-2 py-2 text-right text-xs text-slate-300">{p.dte}d</td>
         <td className="px-2 py-2 text-right text-xs text-slate-400 font-mono">{p.expirationDate || '—'}</td>
-        <td className="px-2 py-2 text-right text-xs text-slate-300 font-mono">{formatIVRank(p.ivRank)}</td>
+        <td className={`px-2 py-2 text-right text-xs font-mono ${ivrColor(p.ivRank)}`} title="IV Rank: current IV as percentile within the last year's range for this ticker">{formatIVRank(p.ivRank)}</td>
         <td className="px-2 py-2 text-center">
           <span className={`inline-block rounded border px-2 py-0.5 text-[10px] font-medium ${CONFIDENCE_STYLES[thesis.confidence]}`}>
             {thesis.confidence}
@@ -77,7 +84,7 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
       {/* Expanded detail row */}
       {expanded && (
         <tr className="border-b border-slate-700/50">
-          <td colSpan={15} className="p-0">
+          <td colSpan={19} className="p-0">
             <div className="px-4 pb-4 bg-slate-900/50 border-t border-slate-700/30">
           <div className="grid gap-4 lg:grid-cols-[1fr_1fr] pt-4">
             {/* Left: Thesis */}
@@ -160,13 +167,19 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
               {/* Quick metrics */}
               <div className="grid grid-cols-3 gap-2">
                 {[
+                  { label: 'Capital', value: formatCurrency((p.strategy === 'CSP' ? p.strikePrice : p.currentPrice) * p.contractSize) },
+                  { label: 'Exp. Move (1σ)', value: `±${formatCurrency(calcImpliedMove1SD(p))}` },
+                  { label: 'σ OTM', value: `${sigmaOTM(p).toFixed(2)}σ` },
                   { label: 'Premium', value: formatCurrency(p.premium) },
-                  { label: 'Breakeven', value: formatCurrency(getBreakeven(p)) },
                   { label: 'Max Profit', value: formatCurrency(getMaxProfit(p)) },
                   { label: 'Ann. Yield', value: formatPercent(annYield) },
+                  { label: 'Breakeven', value: formatCurrency(getBreakeven(p)) },
+                  { label: 'Θ/day', value: formatCurrency(Math.abs(p.theta) * p.contractSize) },
+                  { label: 'Vega', value: formatCurrency(p.vega * p.contractSize) },
                   { label: 'Delta', value: formatDelta(p.delta) },
                   { label: 'P(Safe)', value: formatPSafe(p.delta) },
                   { label: 'IV Rank', value: formatIVRank(p.ivRank) },
+                  { label: 'Extrinsic', value: formatCurrency(p.extrinsicValue * p.contractSize) },
                   { label: 'DTE', value: `${p.dte}d` },
                   { label: 'Expires', value: p.expirationDate || '—' },
                   { label: 'Volume', value: p.volume.toLocaleString() },

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Gauge, Loader2, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { MacroSnapshot } from '../services/macro';
-import { getMacroSnapshot, loadSavedSnapshot, saveSnapshot, clearMacroCache } from '../services/macro';
+import { getMacroSnapshot, loadSavedSnapshot, saveSnapshot, clearMacroCache, computeImpliedMoveSPY, recordCompositeScore, loadCompositeHistory } from '../services/macro';
 import { assessMacro } from '../services/macroSignals';
 import type { MacroAssessment, SignalResult } from '../services/macroSignals';
+import Sparkline from './Sparkline';
 import { formatPercent, scoreColor, scoreBgColor } from '../utils/formatting';
 
 const SECTOR_LABELS: Record<string, string> = {
@@ -42,6 +43,14 @@ export default function MacroAnalysis() {
   const [error, setError] = useState('');
 
   const assessment: MacroAssessment | null = useMemo(() => snapshot ? assessMacro(snapshot) : null, [snapshot]);
+
+  // Record today's composite score on any update
+  useEffect(() => {
+    if (assessment) recordCompositeScore(assessment.compositeScore);
+  }, [assessment]);
+
+  const compositeHistory = loadCompositeHistory();
+  const compositeHistoryValues = compositeHistory.map((e) => e.score);
 
   const refresh = useCallback(async (force: boolean = false) => {
     setError('');
@@ -116,8 +125,16 @@ export default function MacroAnalysis() {
           {/* Composite score + stance */}
           <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className={`text-5xl font-bold font-mono px-4 py-2 rounded border ${scoreColor(assessment.compositeScore)} ${scoreBgColor(assessment.compositeScore)}`}>
-                {assessment.compositeScore.toFixed(0)}
+              <div className="flex flex-col items-center">
+                <div className={`text-5xl font-bold font-mono px-4 py-2 rounded border ${scoreColor(assessment.compositeScore)} ${scoreBgColor(assessment.compositeScore)}`}>
+                  {assessment.compositeScore.toFixed(0)}
+                </div>
+                {compositeHistoryValues.length > 1 && (
+                  <div className="mt-2">
+                    <Sparkline values={compositeHistoryValues} width={120} height={24} color="#34d399" filled />
+                    <div className="text-[10px] text-slate-500 text-center mt-0.5">{compositeHistoryValues.length}-day history</div>
+                  </div>
+                )}
               </div>
               <div className="flex-1 min-w-[200px]">
                 <div className={`inline-block rounded border px-3 py-1 text-xs font-semibold ${stanceBadge(assessment.stance).cls}`}>
@@ -156,6 +173,12 @@ export default function MacroAnalysis() {
                 <IndexRow label="S&P 500" snap={snapshot.indices.SPX} />
                 <IndexRow label="Nasdaq 100" snap={snapshot.indices.NDX} />
                 <IndexRow label="Russell 2000" snap={snapshot.indices.RUT} />
+                {snapshot.spyPrice && snapshot.vix && (
+                  <div className="pt-2 border-t border-slate-700 text-[11px] text-slate-500 space-y-0.5">
+                    <div>SPY 1-week expected move: <span className="text-white font-mono">±${computeImpliedMoveSPY(snapshot.spyPrice, snapshot.vix.level, 7).toFixed(2)}</span></div>
+                    <div>SPY 1-month expected move: <span className="text-white font-mono">±${computeImpliedMoveSPY(snapshot.spyPrice, snapshot.vix.level, 30).toFixed(2)}</span></div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -252,7 +275,7 @@ export default function MacroAnalysis() {
 
 // --- Sub-rows ---
 
-function VolRow({ label, vol }: { label: string; vol?: { level: number; changePct: number; rank: number } }) {
+function VolRow({ label, vol }: { label: string; vol?: { level: number; changePct: number; change5d?: number; rank: number; history?: number[] } }) {
   if (!vol) return <div className="flex items-center gap-2 text-slate-600"><span className="w-16">{label}</span><span className="text-[10px]">unavailable</span></div>;
   const arrow = vol.changePct > 0 ? <TrendingUp className="h-3 w-3 text-red-400" /> : vol.changePct < 0 ? <TrendingDown className="h-3 w-3 text-green-400" /> : <Minus className="h-3 w-3 text-slate-500" />;
   return (
@@ -263,12 +286,20 @@ function VolRow({ label, vol }: { label: string; vol?: { level: number; changePc
       <span className={`text-[11px] font-mono ${vol.changePct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
         {vol.changePct >= 0 ? '+' : ''}{vol.changePct.toFixed(2)}%
       </span>
+      {vol.change5d != null && (
+        <span className={`text-[10px] font-mono ${vol.change5d >= 0 ? 'text-red-400/70' : 'text-green-400/70'}`} title="5-day change">
+          {vol.change5d >= 0 ? '+' : ''}{vol.change5d.toFixed(1)}%·5d
+        </span>
+      )}
+      {vol.history && vol.history.length > 1 && (
+        <Sparkline values={vol.history} width={60} height={16} color="#94a3b8" />
+      )}
       <span className="ml-auto text-[10px] text-slate-500">rank {vol.rank.toFixed(0)}</span>
     </div>
   );
 }
 
-function IndexRow({ label, snap }: { label: string; snap?: { level: number; changePct: number; aboveMA50: boolean; aboveMA200: boolean; distanceFromHigh: number } }) {
+function IndexRow({ label, snap }: { label: string; snap?: { level: number; changePct: number; change5d?: number; aboveMA50: boolean; aboveMA200: boolean; distanceFromHigh: number; history?: number[] } }) {
   if (!snap) return <div className="text-slate-600 text-[11px]">{label}: unavailable</div>;
   const bothAbove = snap.aboveMA50 && snap.aboveMA200;
   const bothBelow = !snap.aboveMA50 && !snap.aboveMA200;
@@ -282,6 +313,14 @@ function IndexRow({ label, snap }: { label: string; snap?: { level: number; chan
         <span className={`text-[11px] font-mono ${snap.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
           {snap.changePct >= 0 ? '+' : ''}{snap.changePct.toFixed(2)}%
         </span>
+        {snap.change5d != null && (
+          <span className={`text-[10px] font-mono ${snap.change5d >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`} title="5-day change">
+            {snap.change5d >= 0 ? '+' : ''}{snap.change5d.toFixed(1)}%·5d
+          </span>
+        )}
+        {snap.history && snap.history.length > 1 && (
+          <Sparkline values={snap.history} width={60} height={16} color="#60a5fa" />
+        )}
       </div>
       <div className={`text-[10px] pl-20 ${stateCls}`}>
         {stateText} &middot; {snap.distanceFromHigh.toFixed(1)}% off 52w high

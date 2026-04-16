@@ -126,6 +126,39 @@ export default function PositionEntry({ onAdd }: Props) {
           />
         </div>
         <div>
+          <label className={labelClass}>Theta</label>
+          <input
+            className={inputClass}
+            type="number"
+            step="0.001"
+            placeholder="-0.035"
+            value={pos.theta || ''}
+            onChange={(e) => update('theta', +e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Vega</label>
+          <input
+            className={inputClass}
+            type="number"
+            step="0.01"
+            placeholder="0.18"
+            value={pos.vega || ''}
+            onChange={(e) => update('vega', +e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Gamma</label>
+          <input
+            className={inputClass}
+            type="number"
+            step="0.001"
+            placeholder="0.01"
+            value={pos.gamma || ''}
+            onChange={(e) => update('gamma', +e.target.value)}
+          />
+        </div>
+        <div>
           <label className={labelClass}>IV (%)</label>
           <input
             className={inputClass}
