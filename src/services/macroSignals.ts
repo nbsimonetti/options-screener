@@ -23,9 +23,15 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+// Logistic transform centered at zero: amplifies dispersion vs. a linear map by
+// pulling values away from the midpoint as |x| grows. k controls steepness.
+function sigmoid(x: number, k: number): number {
+  return 100 / (1 + Math.exp(-k * x));
+}
+
 function tierOf(score: number): Tier {
   if (score >= 65) return 'strong';
-  if (score >= 40) return 'neutral';
+  if (score >= 35) return 'neutral';
   return 'weak';
 }
 
@@ -33,8 +39,9 @@ function tierOf(score: number): Tier {
 function vixRankSignal(snap: MacroSnapshot): SignalResult | null {
   if (!snap.vix) return null;
   const rank = snap.vix.rank;
-  // Higher rank = more premium to sell
-  const score = clamp(rank, 0, 100);
+  // Sigmoid around rank 50: rank 20→8, 30→17, 50→50, 70→83, 80→92. Pushes
+  // compressed-vol regimes meaningfully below 50 rather than mapping to 20-30.
+  const score = sigmoid(rank - 50, 0.08);
   const tier = tierOf(score);
   const commentary = tier === 'strong'
     ? `VIX at ${snap.vix.level.toFixed(1)} (${rank.toFixed(0)}th percentile of 52w) — premium is rich.`
@@ -54,8 +61,9 @@ function termStructureSignal(snap: MacroSnapshot): SignalResult | null {
   const vix = snap.vix.level;
   const vix3m = snap.vix3m.level;
   const spread = vix3m - vix; // positive = contango (healthy), negative = backwardation (stress)
-  // Linear: +3 spread → 100, 0 → 50, -3 → 0
-  const score = clamp(50 + (spread / 3) * 50, 0, 100);
+  // Sigmoid centered at +0.5 (typical healthy contango baseline): spread -2→7,
+  // -1→16, 0→35, +1→65, +2→85, +3→94. Backwardation collapses fast.
+  const score = sigmoid(spread - 0.5, 1.2);
   const tier = tierOf(score);
   const shape = spread > 0.5 ? 'contango' : spread < -0.5 ? 'backwardation' : 'flat';
   const commentary = tier === 'strong'
@@ -74,13 +82,9 @@ function termStructureSignal(snap: MacroSnapshot): SignalResult | null {
 function skewSignal(snap: MacroSnapshot): SignalResult | null {
   if (!snap.skew) return null;
   const skew = snap.skew.level;
-  // Inverted bell: 120-130 = best (score 100), 145+ = weak, <115 = neutral
-  let score: number;
-  if (skew < 115) score = 60;
-  else if (skew < 125) score = 100;
-  else if (skew < 140) score = 65;
-  else if (skew < 150) score = 35;
-  else score = 20;
+  // Continuous linear: SKEW 120→100, 130→75, 140→50, 150→25, 160→5. Realistic
+  // 130-150 range now produces 25-75 dispersion vs. the old bins of 35 or 65.
+  const score = clamp(100 - (skew - 120) * 2.5, 5, 100);
   const tier = tierOf(score);
   const commentary = skew > 150
     ? `SKEW at ${skew.toFixed(1)} — elevated tail-risk hedging. Market is pricing fat left tail.`
@@ -98,14 +102,24 @@ function skewSignal(snap: MacroSnapshot): SignalResult | null {
 function spxTrendSignal(snap: MacroSnapshot): SignalResult | null {
   const spx = snap.indices.SPX;
   if (!spx) return null;
-  // Above both MAs = 85, above one = 55, below both = 25
-  let score: number;
+  // Continuous composite: MA-position base + distance-from-high adjustment +
+  // short-term momentum. Replaces 25/50/85 bins so a bull near highs and a
+  // bull 10% off highs don't both score 85.
+  let ma: number;
   let state: string;
-  if (spx.aboveMA50 && spx.aboveMA200) { score = 85; state = 'above both 50 & 200 DMA'; }
-  else if (!spx.aboveMA50 && !spx.aboveMA200) { score = 25; state = 'below both 50 & 200 DMA'; }
-  else { score = 50; state = spx.aboveMA200 ? 'above 200 DMA but below 50 DMA' : 'above 50 DMA but below 200 DMA'; }
+  if (spx.aboveMA50 && spx.aboveMA200) { ma = 70; state = 'above both 50 & 200 DMA'; }
+  else if (!spx.aboveMA50 && !spx.aboveMA200) { ma = 15; state = 'below both 50 & 200 DMA'; }
+  else { ma = spx.aboveMA200 ? 50 : 40; state = spx.aboveMA200 ? 'above 200 DMA but below 50 DMA' : 'above 50 DMA but below 200 DMA'; }
+
+  const dfh = spx.distanceFromHigh;
+  const distAdj = dfh >= -2 ? 20 : dfh >= -5 ? 10 : dfh >= -10 ? 0 : dfh >= -15 ? -15 : -30;
+
+  const mom = spx.change5d ?? 0;
+  const momAdj = mom > 2 ? 10 : mom > 0.5 ? 5 : mom > -0.5 ? 0 : mom > -2 ? -5 : -15;
+
+  const score = clamp(ma + distAdj + momAdj, 0, 100);
   const tier = tierOf(score);
-  const commentary = `SPX at ${spx.level.toFixed(0)} is ${state}. ${spx.distanceFromHigh >= -2 ? 'Near all-time highs.' : `${Math.abs(spx.distanceFromHigh).toFixed(1)}% off 52w high.`}`;
+  const commentary = `SPX at ${spx.level.toFixed(0)} is ${state}. ${dfh >= -2 ? 'Near all-time highs.' : `${Math.abs(dfh).toFixed(1)}% off 52w high.`}${mom !== 0 ? ` 5d ${mom >= 0 ? '+' : ''}${mom.toFixed(1)}%.` : ''}`;
   return {
     label: 'SPX Trend',
     tier, score, weight: 15,
@@ -117,9 +131,9 @@ function spxTrendSignal(snap: MacroSnapshot): SignalResult | null {
 function creditSignal(snap: MacroSnapshot): SignalResult | null {
   if (!snap.creditSpread) return null;
   const trend = snap.creditSpread.ratioTrend20d;
-  // Rising HYG/LQD ratio = credit tightening = bullish. Falling = widening = risk-off.
-  // +2% trend → 80, 0 → 50, -2% → 20
-  const score = clamp(50 + (trend / 2) * 30, 0, 100);
+  // Sigmoid amplifies sensitivity: trend -2%→5, -1%→18, 0→50, +1%→82, +2%→95.
+  // Previous linear formula barely moved off 50 for typical ±0.5% trend.
+  const score = sigmoid(trend, 1.5);
   const tier = tierOf(score);
   const direction = trend > 0.3 ? 'tightening' : trend < -0.3 ? 'widening' : 'flat';
   const commentary = tier === 'strong'
@@ -138,8 +152,10 @@ function creditSignal(snap: MacroSnapshot): SignalResult | null {
 function vrpSignal(snap: MacroSnapshot): SignalResult | null {
   if (!snap.vrp) return null;
   const d = snap.vrp.delta;
-  // +5 delta = 85, 0 = 50, -5 = 20
-  const score = clamp(50 + (d / 5) * 35, 0, 100);
+  // Asymmetric: negative VRP (IV < realized) is catastrophic for premium
+  // sellers — punish 75% harder than positive VRP is rewarded.
+  // delta -3→8, -1→36, 0→50, +2→66, +5→90, +7→100.
+  const score = clamp(50 + (d >= 0 ? d * 8 : d * 14), 0, 100);
   const tier = tierOf(score);
   const commentary = d > 3
     ? `IV ${snap.vrp.impliedVol.toFixed(1)} exceeds 20d realized vol ${snap.vrp.realizedVol20d.toFixed(1)} by ${d.toFixed(1)} — sellers paid to take on volatility risk.`
@@ -160,7 +176,8 @@ function breadthSignal(snap: MacroSnapshot): SignalResult | null {
   const positives = values.filter((v) => v > 0).length;
   const total = values.length;
   const pct = (positives / total) * 100;
-  const score = pct; // directly map to 0-100
+  // Sigmoid pulls extremes outward: 20%→5, 40%→27, 50%→50, 60%→73, 80%→95.
+  const score = sigmoid(pct - 50, 0.10);
   const tier = tierOf(score);
   const commentary = `${positives} of ${total} sector ETFs positive over 20 days (${pct.toFixed(0)}% breadth).`;
   return {
@@ -186,10 +203,17 @@ export function assessMacro(snap: MacroSnapshot): MacroAssessment {
 
   const totalWeight = signals.reduce((s, v) => s + v.weight, 0);
   const weighted = signals.reduce((s, v) => s + v.score * v.weight, 0);
-  const compositeScore = totalWeight > 0 ? weighted / totalWeight : 0;
+  const baseScore = totalWeight > 0 ? weighted / totalWeight : 0;
+
+  // Stress penalty: when multiple signals collapse simultaneously, arithmetic
+  // averaging understates systemic risk because a high VIX-rank score keeps
+  // propping up the composite. Deduct 4pts per signal below 20 so that
+  // crisis-like multi-alarm regimes drop into the single digits.
+  const stressCount = signals.filter((s) => s.score < 20).length;
+  const compositeScore = clamp(baseScore - 4 * stressCount, 0, 100);
 
   const stance: MacroAssessment['stance'] =
-    compositeScore >= 65 ? 'favorable' : compositeScore >= 40 ? 'neutral' : 'unfavorable';
+    compositeScore >= 60 ? 'favorable' : compositeScore >= 35 ? 'neutral' : 'unfavorable';
 
   // Build summary + recommendations
   const strong = signals.filter((s) => s.tier === 'strong');

@@ -31,14 +31,14 @@ export function formatPSafe(delta: number): string {
 }
 
 export function scoreColor(score: number): string {
-  if (score >= 70) return 'text-green-400';
-  if (score >= 40) return 'text-yellow-400';
+  if (score >= 65) return 'text-green-400';
+  if (score >= 35) return 'text-yellow-400';
   return 'text-red-400';
 }
 
 export function scoreBgColor(score: number): string {
-  if (score >= 70) return 'bg-green-900/30 border-green-700/50';
-  if (score >= 40) return 'bg-yellow-900/30 border-yellow-700/50';
+  if (score >= 65) return 'bg-green-900/30 border-green-700/50';
+  if (score >= 35) return 'bg-yellow-900/30 border-yellow-700/50';
   return 'bg-red-900/30 border-red-700/50';
 }
 
