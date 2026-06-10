@@ -193,6 +193,8 @@ export const LS_IDEAS = 'options-screener-ideas';
 export const LS_WATCHLIST = 'options-screener-watchlist';
 export const LS_EXCLUDED = 'options-screener-excluded';
 export const LS_TABLE_SETS = 'options-screener-table-sets';
+export const LS_SAVED_WATCHLISTS = 'options-screener-saved-watchlists';
+export const LS_ACTIVE_WATCHLIST = 'options-screener-active-watchlist';
 
 export interface ScanFilter {
   minAnnualYield: number; // decimal, e.g. 0.10 = 10%
@@ -211,3 +213,16 @@ export const DEFAULT_SCAN_FILTER: ScanFilter = {
 };
 
 export const LS_SCAN_FILTER = 'options-screener-scan-filter';
+
+// --- Saved Watchlists ---
+// A named, reusable list of tickers plus its own scan filters. When a watchlist
+// is active, the Idea Generator scans EXACTLY these tickers (the default universe
+// and the excluded list are set aside).
+export interface SavedWatchlist {
+  id: string;
+  name: string;
+  tickers: string[];     // normalized: uppercased, trimmed, de-duped, sorted
+  filters: ScanFilter;   // each watchlist owns its scan filters
+  createdAt: string;     // ISO
+  updatedAt: string;     // ISO
+}

@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
-import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter } from '../types';
+import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info, ArrowUpDown, ArrowUp, ArrowDown, Bookmark, Save, Pencil, Trash2, Check } from 'lucide-react';
+import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter, SavedWatchlist } from '../types';
 import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER, LS_TABLE_SETS } from '../types';
-import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET } from '../services/universe';
+import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET, normalizeTickers, getSavedWatchlists, getActiveWatchlistId, setActiveWatchlistId, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/universe';
 import { scanForIdeas } from '../services/scanner';
 import type { ScanCandidate } from '../services/scanner';
 import { generateTheses } from '../services/claude';
@@ -66,6 +66,28 @@ function loadTableSets(): TableSets {
   }
 }
 
+/** Resolve the persisted active watchlist (if any still exists) on mount. */
+function resolveInitialActive(): SavedWatchlist | null {
+  const id = getActiveWatchlistId();
+  if (!id) return null;
+  return getSavedWatchlists().find((w) => w.id === id) ?? null;
+}
+
+function tickersEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((t, i) => t === b[i]);
+}
+
+function filtersEqual(a: ScanFilter, b: ScanFilter): boolean {
+  return (
+    a.minAnnualYield === b.minAnnualYield &&
+    a.minDTE === b.minDTE &&
+    a.maxDTE === b.maxDTE &&
+    a.minOTMPct === b.minOTMPct &&
+    a.maxOTMPct === b.maxOTMPct
+  );
+}
+
 export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange, onAddToScreener }: Props) {
   const [progress, setProgress] = useState<ScanProgress>({ phase: 'idle', current: 0, total: 0, currentTicker: '', message: '', requestsUsed: 0, requestBudget: 2000 });
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -76,6 +98,22 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   const [excludedState, setExcludedState] = useState<string[]>(() => getExcluded());
   const [tableSets, setTableSets] = useState<TableSets>(() => loadTableSets());
   const [scanFilter, setScanFilter] = useState<ScanFilter>(() => loadScanFilter());
+
+  // --- Saved watchlists ---
+  // `mode` is 'default' (the legacy defaults + custom − excluded universe) or
+  // 'watchlist' (an active named list). In watchlist mode the working* state is an
+  // editable buffer seeded from the saved watchlist; it is only written back to the
+  // saved watchlist when the user clicks Save (explicit save). `activeId === null`
+  // while in watchlist mode means an unsaved, brand-new draft.
+  const [savedWatchlists, setSavedWatchlists] = useState<SavedWatchlist[]>(() => getSavedWatchlists());
+  const [mode, setMode] = useState<'default' | 'watchlist'>(() => (resolveInitialActive() ? 'watchlist' : 'default'));
+  const [activeId, setActiveId] = useState<string | null>(() => resolveInitialActive()?.id ?? null);
+  const [workingName, setWorkingName] = useState<string>(() => resolveInitialActive()?.name ?? '');
+  const [workingTickers, setWorkingTickers] = useState<string[]>(() => resolveInitialActive()?.tickers ?? []);
+  const [workingFilters, setWorkingFilters] = useState<ScanFilter>(() => resolveInitialActive()?.filters ?? DEFAULT_SCAN_FILTER);
+  const [formKind, setFormKind] = useState<null | 'create' | 'rename'>(null);
+  const [formName, setFormName] = useState('');
+  const [wlError, setWlError] = useState('');
 
   useEffect(() => {
     localStorage.setItem(LS_SCAN_FILTER, JSON.stringify(scanFilter));
@@ -88,7 +126,27 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   const hasClaude = ((apiConfig.claudeApiKey) || '').length > 0;
 
   const defaultTickers = getDefaultUniverse();
-  const universe = getUniverse();
+  const universe = getUniverse(); // default-mode universe (defaults + custom − excluded)
+
+  // The tickers and filters that will actually be scanned, given the current mode.
+  const effectiveUniverse = mode === 'watchlist' ? normalizeTickers(workingTickers) : universe;
+  const effectiveFilter = mode === 'watchlist' ? workingFilters : scanFilter;
+
+  const activeSnapshot = useMemo(
+    () => savedWatchlists.find((w) => w.id === activeId) ?? null,
+    [savedWatchlists, activeId],
+  );
+
+  // Does the working buffer differ from what's saved? Drives the Save button + indicator.
+  const dirty = mode === 'watchlist' && (
+    activeId === null
+      ? workingTickers.length > 0 || workingName.trim() !== ''
+      : !!activeSnapshot && (
+          activeSnapshot.name !== workingName ||
+          !tickersEqual(normalizeTickers(activeSnapshot.tickers), normalizeTickers(workingTickers)) ||
+          !filtersEqual(activeSnapshot.filters, workingFilters)
+        )
+  );
 
   const ideaById = useMemo(() => new Map(ideas.map((i) => [i.position.id, i])), [ideas]);
 
@@ -113,9 +171,16 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
     setError('');
     setExpandedId(null);
 
+    if (effectiveUniverse.length === 0) {
+      setError(mode === 'watchlist'
+        ? 'This watchlist has no tickers. Add some before scanning.'
+        : 'No tickers to scan. Add some or restore the defaults.');
+      return;
+    }
+
     try {
-      setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting scan...', requestsUsed: 0, requestBudget: 2000 });
-      const scanResult = await scanForIdeas(universe, weights, setProgress, apiConfig.marketDataToken || undefined, scanFilter);
+      setProgress({ phase: 'fetching', current: 0, total: effectiveUniverse.length, currentTicker: '', message: 'Starting scan...', requestsUsed: 0, requestBudget: 2000 });
+      const scanResult = await scanForIdeas(effectiveUniverse, weights, setProgress, apiConfig.marketDataToken || undefined, effectiveFilter);
       const usedNow = getRequestCount();
 
       // De-duplicate by position id across all three sets so Claude sees each candidate once
@@ -156,7 +221,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       setError(msg);
       setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg, requestsUsed: getRequestCount(), requestBudget: 2000 });
     }
-  }, [universe, apiConfig, weights, hasClaude, onIdeasChange, scanFilter]);
+  }, [effectiveUniverse, effectiveFilter, mode, apiConfig, weights, hasClaude, onIdeasChange]);
 
   const handleAddToScreener = (idea: InvestmentIdea) => {
     onAddToScreener([idea.position]);
@@ -169,6 +234,8 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
   const handleToggle = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
   };
+
+  // --- Default-universe ticker management (mode === 'default') ---
 
   const handleAddWatchlistTicker = () => {
     const t = newTicker.trim().toUpperCase();
@@ -210,11 +277,158 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
     setExcludedState([]);
   };
 
+  // --- Watchlist mode: working-buffer editing + explicit save ---
+
+  const refreshSaved = () => setSavedWatchlists(getSavedWatchlists());
+
+  const confirmDiscardIfDirty = () =>
+    !dirty || window.confirm('Discard unsaved changes to the current watchlist?');
+
+  const loadWatchlistById = (id: string) => {
+    if (!confirmDiscardIfDirty()) return;
+    const wl = getSavedWatchlists().find((w) => w.id === id);
+    if (!wl) return;
+    setActiveWatchlistId(id);
+    setActiveId(id);
+    setMode('watchlist');
+    setWorkingName(wl.name);
+    setWorkingTickers(wl.tickers);
+    setWorkingFilters(wl.filters);
+    setFormKind(null);
+    setWlError('');
+  };
+
+  const switchToDefault = () => {
+    if (!confirmDiscardIfDirty()) return;
+    setActiveWatchlistId(null);
+    setActiveId(null);
+    setMode('default');
+    setFormKind(null);
+    setWlError('');
+  };
+
+  const startNewWatchlist = () => {
+    if (!confirmDiscardIfDirty()) return;
+    setActiveWatchlistId(null);
+    setActiveId(null);
+    setMode('watchlist');
+    setWorkingName('');
+    setWorkingTickers([]);
+    setWorkingFilters(DEFAULT_SCAN_FILTER);
+    setFormKind(null);
+    setWlError('');
+    setNewTicker('');
+  };
+
+  const onSelectorChange = (value: string) => {
+    if (value === '__default__') switchToDefault();
+    else if (value === '__new__') { /* already on the unsaved draft */ }
+    else loadWatchlistById(value);
+  };
+
+  const openCreateForm = () => {
+    setFormKind('create');
+    setFormName(activeId === null ? workingName : '');
+    setWlError('');
+  };
+
+  const openRenameForm = () => {
+    setFormKind('rename');
+    setFormName(workingName);
+    setWlError('');
+  };
+
+  const cancelForm = () => {
+    setFormKind(null);
+    setWlError('');
+  };
+
+  // Save button: a brand-new draft needs a name (open the form); an existing active
+  // watchlist is updated in place.
+  const handleSaveClick = () => {
+    if (activeId === null) {
+      openCreateForm();
+      return;
+    }
+    try {
+      const wl = updateWatchlist(activeId, { name: workingName, tickers: workingTickers, filters: workingFilters });
+      setWorkingName(wl.name);
+      setWorkingTickers(wl.tickers);
+      setWorkingFilters(wl.filters);
+      refreshSaved();
+      setWlError('');
+    } catch (e) {
+      setWlError(e instanceof Error ? e.message : 'Could not save watchlist.');
+    }
+  };
+
+  const confirmForm = () => {
+    try {
+      if (formKind === 'create') {
+        const wl = createWatchlist(formName, workingTickers, workingFilters);
+        setActiveWatchlistId(wl.id);
+        setActiveId(wl.id);
+        setWorkingName(wl.name);
+        setWorkingTickers(wl.tickers);
+        setWorkingFilters(wl.filters);
+        refreshSaved();
+      } else if (formKind === 'rename' && activeId !== null) {
+        const wl = updateWatchlist(activeId, { name: formName });
+        setWorkingName(wl.name);
+        refreshSaved();
+      }
+      setFormKind(null);
+      setWlError('');
+    } catch (e) {
+      setWlError(e instanceof Error ? e.message : 'Could not save watchlist.');
+    }
+  };
+
+  const revertWorking = () => {
+    if (!activeSnapshot) return;
+    setWorkingName(activeSnapshot.name);
+    setWorkingTickers(activeSnapshot.tickers);
+    setWorkingFilters(activeSnapshot.filters);
+    setWlError('');
+  };
+
+  const handleDeleteWatchlist = () => {
+    if (activeId === null) return;
+    const name = activeSnapshot?.name ?? workingName;
+    if (!window.confirm(`Delete watchlist "${name}"? This cannot be undone.`)) return;
+    deleteWatchlist(activeId);
+    refreshSaved();
+    setActiveId(null);
+    setMode('default');
+    setFormKind(null);
+    setWlError('');
+  };
+
+  const addWorkingTicker = () => {
+    const t = newTicker.trim().toUpperCase();
+    if (!t) return;
+    setWorkingTickers((prev) => normalizeTickers([...prev, t]));
+    setNewTicker('');
+  };
+
+  const removeWorkingTicker = (ticker: string) => {
+    setWorkingTickers((prev) => prev.filter((t) => t !== ticker));
+  };
+
+  const handleAddTicker = () => (mode === 'watchlist' ? addWorkingTicker() : handleAddWatchlistTicker());
+
+  const setFilter = (patch: Partial<ScanFilter>) => {
+    if (mode === 'watchlist') setWorkingFilters((prev) => ({ ...prev, ...patch }));
+    else setScanFilter((prev) => ({ ...prev, ...patch }));
+  };
+
   const isScanning = progress.phase === 'fetching' || progress.phase === 'scoring' || progress.phase === 'analyzing';
   const progressPct = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
 
   const inputClass = 'rounded bg-slate-800 border border-slate-600 px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500';
   const labelClass = 'text-[10px] font-medium text-slate-500 uppercase tracking-wider';
+  const wlBtn = 'flex items-center gap-1 rounded bg-slate-800 border border-slate-600 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-500 hover:text-white transition-colors';
+  const selectorValue = mode === 'watchlist' ? (activeId ?? '__new__') : '__default__';
 
   return (
     <div className="space-y-4">
@@ -242,7 +456,11 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
           </button>
 
           <span className="ml-auto text-xs text-slate-500">
-            {universe.length} tickers &middot; {hasClaude ? 'AI theses' : 'Algorithmic analysis'}
+            {effectiveUniverse.length} tickers &middot;{' '}
+            <span className={mode === 'watchlist' ? 'text-emerald-400' : ''}>
+              {mode === 'watchlist' ? (workingName || 'Untitled watchlist') : 'Default universe'}
+            </span>
+            {dirty && <span className="text-amber-400"> &bull;</span>} &middot; {hasClaude ? 'AI theses' : 'Algorithmic analysis'}
           </span>
         </div>
 
@@ -288,9 +506,110 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       {/* Settings panel */}
       {showSettings && (
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-4">
+          {/* Watchlists */}
+          <div>
+            <h3 className="text-xs font-semibold text-white mb-2 flex items-center gap-2">
+              <Bookmark className="h-3.5 w-3.5 text-amber-400" /> Watchlists
+            </h3>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={selectorValue}
+                onChange={(e) => onSelectorChange(e.target.value)}
+                className={`${inputClass} min-w-[200px]`}
+                aria-label="Active watchlist"
+              >
+                <option value="__default__">Default universe ({universe.length})</option>
+                {savedWatchlists.map((w) => (
+                  <option key={w.id} value={w.id}>{w.name} ({w.tickers.length})</option>
+                ))}
+                {mode === 'watchlist' && activeId === null && (
+                  <option value="__new__">Untitled watchlist ({workingTickers.length})</option>
+                )}
+              </select>
+
+              <button onClick={startNewWatchlist} className={wlBtn} title="Start a new watchlist">
+                <Plus className="h-3.5 w-3.5" /> New
+              </button>
+
+              {mode === 'watchlist' && (
+                <>
+                  <button
+                    onClick={handleSaveClick}
+                    disabled={!dirty}
+                    className="flex items-center gap-1 rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    title="Save this watchlist"
+                  >
+                    <Save className="h-3.5 w-3.5" /> Save Watchlist
+                  </button>
+
+                  {activeId !== null && (
+                    <button onClick={openCreateForm} className={wlBtn} title="Save as a new watchlist">
+                      <Plus className="h-3.5 w-3.5" /> Save as new
+                    </button>
+                  )}
+
+                  {activeId !== null && (
+                    <button onClick={openRenameForm} className={wlBtn} title="Rename this watchlist">
+                      <Pencil className="h-3.5 w-3.5" /> Rename
+                    </button>
+                  )}
+
+                  {dirty && activeId !== null && (
+                    <button onClick={revertWorking} className={wlBtn} title="Discard unsaved changes">
+                      <RotateCcw className="h-3.5 w-3.5" /> Revert
+                    </button>
+                  )}
+
+                  {activeId !== null && (
+                    <button
+                      onClick={handleDeleteWatchlist}
+                      className="flex items-center gap-1 rounded bg-slate-800 border border-slate-600 px-3 py-1.5 text-xs text-slate-400 hover:border-red-500 hover:text-red-400 transition-colors"
+                      title="Delete this watchlist"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+            {mode === 'watchlist' && dirty && (
+              <p className="mt-2 text-[10px] text-amber-400">
+                &bull; Unsaved changes{activeId === null ? ' — click Save Watchlist to name and store this list.' : ''}
+              </p>
+            )}
+
+            {formKind && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  autoFocus
+                  className={`${inputClass} flex-1`}
+                  placeholder={formKind === 'rename' ? 'New watchlist name' : 'Name this watchlist'}
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') confirmForm();
+                    if (e.key === 'Escape') cancelForm();
+                  }}
+                />
+                <button onClick={confirmForm} className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 transition-colors" aria-label="Confirm">
+                  <Check className="h-4 w-4" />
+                </button>
+                <button onClick={cancelForm} className="rounded bg-slate-800 border border-slate-600 px-3 py-1.5 text-sm text-slate-400 hover:text-white transition-colors" aria-label="Cancel">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            {wlError && <p className="mt-2 text-xs text-red-400">{wlError}</p>}
+          </div>
+
           {/* Scan filters */}
           <div>
-            <h3 className="text-xs font-semibold text-white mb-2">Scan Filters</h3>
+            <h3 className="text-xs font-semibold text-white mb-2">
+              Scan Filters{mode === 'watchlist' && <span className="ml-2 text-[10px] font-normal text-slate-500">(saved with this watchlist)</span>}
+            </h3>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <div>
                 <label className={labelClass}>Min Ann. Yield %</label>
@@ -298,8 +617,8 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                   className={`${inputClass} w-full mt-1`}
                   type="number"
                   step="1"
-                  value={+(scanFilter.minAnnualYield * 100).toFixed(1)}
-                  onChange={(e) => setScanFilter({ ...scanFilter, minAnnualYield: +e.target.value / 100 })}
+                  value={+(effectiveFilter.minAnnualYield * 100).toFixed(1)}
+                  onChange={(e) => setFilter({ minAnnualYield: +e.target.value / 100 })}
                 />
               </div>
               <div>
@@ -307,8 +626,8 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 <input
                   className={`${inputClass} w-full mt-1`}
                   type="number"
-                  value={scanFilter.minDTE}
-                  onChange={(e) => setScanFilter({ ...scanFilter, minDTE: +e.target.value })}
+                  value={effectiveFilter.minDTE}
+                  onChange={(e) => setFilter({ minDTE: +e.target.value })}
                 />
               </div>
               <div>
@@ -316,8 +635,8 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 <input
                   className={`${inputClass} w-full mt-1`}
                   type="number"
-                  value={scanFilter.maxDTE}
-                  onChange={(e) => setScanFilter({ ...scanFilter, maxDTE: +e.target.value })}
+                  value={effectiveFilter.maxDTE}
+                  onChange={(e) => setFilter({ maxDTE: +e.target.value })}
                 />
               </div>
               <div>
@@ -326,8 +645,8 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                   className={`${inputClass} w-full mt-1`}
                   type="number"
                   step="0.5"
-                  value={scanFilter.minOTMPct}
-                  onChange={(e) => setScanFilter({ ...scanFilter, minOTMPct: +e.target.value })}
+                  value={effectiveFilter.minOTMPct}
+                  onChange={(e) => setFilter({ minOTMPct: +e.target.value })}
                 />
               </div>
               <div>
@@ -336,112 +655,148 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                   className={`${inputClass} w-full mt-1`}
                   type="number"
                   step="0.5"
-                  value={scanFilter.maxOTMPct}
-                  onChange={(e) => setScanFilter({ ...scanFilter, maxOTMPct: +e.target.value })}
+                  value={effectiveFilter.maxOTMPct}
+                  onChange={(e) => setFilter({ maxOTMPct: +e.target.value })}
                 />
               </div>
             </div>
           </div>
 
-          {/* Universe management */}
+          {/* Universe / watchlist tickers */}
           <div>
-            <h3 className="text-xs font-semibold text-white mb-2">Scan Universe</h3>
-            <p className="text-[10px] text-slate-500 mb-2">
-              {defaultTickers.length} defaults + {watchlistState.length} custom &minus; {excludedState.length} excluded &nbsp;=&nbsp; <span className="text-emerald-400 font-mono">{universe.length}</span> being scanned
-            </p>
+            <h3 className="text-xs font-semibold text-white mb-2">{mode === 'watchlist' ? 'Watchlist Tickers' : 'Scan Universe'}</h3>
+
+            {mode === 'watchlist' ? (
+              <p className="text-[10px] text-slate-500 mb-2">
+                <span className="text-emerald-400 font-mono">{effectiveUniverse.length}</span> tickers in {workingName ? `"${workingName}"` : 'this watchlist'} &mdash; only these are scanned.
+              </p>
+            ) : (
+              <p className="text-[10px] text-slate-500 mb-2">
+                {defaultTickers.length} defaults + {watchlistState.length} custom &minus; {excludedState.length} excluded &nbsp;=&nbsp; <span className="text-emerald-400 font-mono">{universe.length}</span> being scanned
+              </p>
+            )}
 
             <div className="flex gap-2 mb-2">
               <input
                 className={`${inputClass} flex-1`}
-                placeholder="Add ticker to watchlist"
+                placeholder={mode === 'watchlist' ? 'Add ticker to this watchlist' : 'Add ticker to watchlist'}
                 value={newTicker}
                 onChange={(e) => setNewTicker(e.target.value.toUpperCase())}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddWatchlistTicker()}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddTicker()}
               />
-              <button onClick={handleAddWatchlistTicker} className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 transition-colors">
+              <button onClick={handleAddTicker} className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 transition-colors">
                 <Plus className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="mb-2">
-              <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Scanning ({universe.length})</div>
-              {universe.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5 items-center max-h-[160px] overflow-y-auto p-2 rounded bg-slate-900/50 border border-slate-700">
-                  {universe.map((t) => {
-                    const isCustom = !DEFAULT_UNIVERSE_SET.has(t);
-                    return (
+            {mode === 'watchlist' ? (
+              <div className="mb-2">
+                <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Scanning ({effectiveUniverse.length})</div>
+                {effectiveUniverse.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 items-center max-h-[160px] overflow-y-auto p-2 rounded bg-slate-900/50 border border-slate-700">
+                    {effectiveUniverse.map((t) => (
                       <span
                         key={t}
-                        className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs ${
-                          isCustom
-                            ? 'bg-emerald-900/40 text-emerald-200 border border-emerald-700/50'
-                            : 'bg-slate-700 text-slate-300'
-                        }`}
+                        className="flex items-center gap-1 rounded px-2 py-0.5 text-xs bg-emerald-900/40 text-emerald-200 border border-emerald-700/50"
                       >
-                        {isCustom && <span className="text-emerald-400">+</span>}
                         {t}
                         <button
-                          onClick={() => handleRemoveFromUniverse(t)}
+                          onClick={() => removeWorkingTicker(t)}
                           className="text-slate-500 hover:text-red-400 transition-colors"
                           aria-label={`Remove ${t}`}
                         >
                           <X className="h-3 w-3" />
                         </button>
                       </span>
-                    );
-                  })}
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-600 italic">No tickers yet. Add some above, then click Save Watchlist.</p>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="mb-2">
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Scanning ({universe.length})</div>
+                  {universe.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 items-center max-h-[160px] overflow-y-auto p-2 rounded bg-slate-900/50 border border-slate-700">
+                      {universe.map((t) => {
+                        const isCustom = !DEFAULT_UNIVERSE_SET.has(t);
+                        return (
+                          <span
+                            key={t}
+                            className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs ${
+                              isCustom
+                                ? 'bg-emerald-900/40 text-emerald-200 border border-emerald-700/50'
+                                : 'bg-slate-700 text-slate-300'
+                            }`}
+                          >
+                            {isCustom && <span className="text-emerald-400">+</span>}
+                            {t}
+                            <button
+                              onClick={() => handleRemoveFromUniverse(t)}
+                              className="text-slate-500 hover:text-red-400 transition-colors"
+                              aria-label={`Remove ${t}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-600 italic">No active tickers. Add some or restore defaults below.</p>
+                  )}
                 </div>
-              ) : (
-                <p className="text-[10px] text-slate-600 italic">No active tickers. Add some or restore defaults below.</p>
-              )}
-            </div>
 
-            {excludedState.length > 0 && (
-              <div className="mb-2">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="text-[10px] text-slate-500 uppercase tracking-wider">Excluded ({excludedState.length})</div>
+                {excludedState.length > 0 && (
+                  <div className="mb-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-[10px] text-slate-500 uppercase tracking-wider">Excluded ({excludedState.length})</div>
+                      <button
+                        onClick={handleRestoreDefaults}
+                        className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                      >
+                        <RotateCcw className="h-3 w-3" /> Restore defaults
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 items-center p-2 rounded bg-slate-900/30 border border-slate-800">
+                      {excludedState.map((t) => (
+                        <span
+                          key={t}
+                          className="flex items-center gap-1 rounded bg-slate-800/50 text-slate-500 border border-slate-700 px-2 py-0.5 text-xs"
+                        >
+                          {t}
+                          <button
+                            onClick={() => handleIncludeDefault(t)}
+                            className="text-slate-500 hover:text-emerald-400 transition-colors"
+                            aria-label={`Include ${t}`}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-1">
                   <button
-                    onClick={handleRestoreDefaults}
-                    className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                    onClick={handleClearCustom}
+                    disabled={watchlistState.length === 0}
+                    className="text-[10px] text-slate-500 hover:text-red-400 disabled:opacity-40 disabled:hover:text-slate-500 flex items-center gap-1"
                   >
-                    <RotateCcw className="h-3 w-3" /> Restore defaults
+                    <X className="h-3 w-3" /> Clear all custom
+                  </button>
+                  <button
+                    onClick={handleResetAll}
+                    className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                  >
+                    <RotateCcw className="h-3 w-3" /> Reset everything
                   </button>
                 </div>
-                <div className="flex flex-wrap gap-1.5 items-center p-2 rounded bg-slate-900/30 border border-slate-800">
-                  {excludedState.map((t) => (
-                    <span
-                      key={t}
-                      className="flex items-center gap-1 rounded bg-slate-800/50 text-slate-500 border border-slate-700 px-2 py-0.5 text-xs"
-                    >
-                      {t}
-                      <button
-                        onClick={() => handleIncludeDefault(t)}
-                        className="text-slate-500 hover:text-emerald-400 transition-colors"
-                        aria-label={`Include ${t}`}
-                      >
-                        <Plus className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              </div>
+              </>
             )}
-
-            <div className="flex gap-3 pt-1">
-              <button
-                onClick={handleClearCustom}
-                disabled={watchlistState.length === 0}
-                className="text-[10px] text-slate-500 hover:text-red-400 disabled:opacity-40 disabled:hover:text-slate-500 flex items-center gap-1"
-              >
-                <X className="h-3 w-3" /> Clear all custom
-              </button>
-              <button
-                onClick={handleResetAll}
-                className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1"
-              >
-                <RotateCcw className="h-3 w-3" /> Reset everything
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -491,7 +846,9 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       {ideas.length === 0 && progress.phase === 'idle' && (
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-12 text-center">
           <Sparkles className="h-8 w-8 text-slate-600 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Click "Generate Ideas" to scan {universe.length} tickers and find the best CSP and CC opportunities.</p>
+          <p className="text-sm text-slate-500">
+            Click "Generate Ideas" to scan {effectiveUniverse.length} {mode === 'watchlist' ? `tickers in ${workingName ? `"${workingName}"` : 'this watchlist'}` : 'tickers'} and find the best CSP and CC opportunities.
+          </p>
           <p className="text-xs text-slate-600 mt-1">Uses free MarketData.app data — no API key required for AAPL demo.</p>
         </div>
       )}

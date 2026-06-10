@@ -1,4 +1,5 @@
-import { LS_WATCHLIST, LS_EXCLUDED } from '../types';
+import { LS_WATCHLIST, LS_EXCLUDED, LS_SAVED_WATCHLISTS, LS_ACTIVE_WATCHLIST } from '../types';
+import type { ScanFilter, SavedWatchlist } from '../types';
 
 const DEFAULT_UNIVERSE = [
   // Tech
@@ -115,4 +116,108 @@ export function setWatchlist(tickers: string[]) {
 export function resetToDefault() {
   saveWatchlist([]);
   saveExcluded([]);
+}
+
+// --- Saved Watchlists ---
+
+/** Uppercase, trim, drop blanks, de-dupe, and sort a list of tickers. */
+export function normalizeTickers(tickers: string[]): string[] {
+  const seen = new Set<string>();
+  for (const t of tickers) {
+    const u = t.toUpperCase().trim();
+    if (u) seen.add(u);
+  }
+  return [...seen].sort();
+}
+
+function loadSavedWatchlists(): SavedWatchlist[] {
+  try {
+    const stored = localStorage.getItem(LS_SAVED_WATCHLISTS);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedWatchlists(list: SavedWatchlist[]) {
+  localStorage.setItem(LS_SAVED_WATCHLISTS, JSON.stringify(list));
+}
+
+function nameTaken(list: SavedWatchlist[], name: string, exceptId?: string): boolean {
+  const n = name.trim().toLowerCase();
+  return list.some((w) => w.id !== exceptId && w.name.trim().toLowerCase() === n);
+}
+
+export function getSavedWatchlists(): SavedWatchlist[] {
+  return loadSavedWatchlists();
+}
+
+export function getActiveWatchlistId(): string | null {
+  try {
+    const stored = localStorage.getItem(LS_ACTIVE_WATCHLIST);
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setActiveWatchlistId(id: string | null) {
+  localStorage.setItem(LS_ACTIVE_WATCHLIST, JSON.stringify(id));
+}
+
+export function getActiveWatchlist(): SavedWatchlist | null {
+  const id = getActiveWatchlistId();
+  if (!id) return null;
+  return loadSavedWatchlists().find((w) => w.id === id) ?? null;
+}
+
+/** Create and persist a new named watchlist. Throws on empty or duplicate name. */
+export function createWatchlist(name: string, tickers: string[], filters: ScanFilter): SavedWatchlist {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Watchlist name cannot be empty.');
+  const list = loadSavedWatchlists();
+  if (nameTaken(list, trimmed)) throw new Error(`A watchlist named "${trimmed}" already exists.`);
+  const now = new Date().toISOString();
+  const watchlist: SavedWatchlist = {
+    id: crypto.randomUUID(),
+    name: trimmed,
+    tickers: normalizeTickers(tickers),
+    filters: { ...filters },
+    createdAt: now,
+    updatedAt: now,
+  };
+  persistSavedWatchlists([...list, watchlist]);
+  return watchlist;
+}
+
+/** Update an existing watchlist's name, tickers, and/or filters. Throws on empty/duplicate name. */
+export function updateWatchlist(
+  id: string,
+  patch: Partial<Pick<SavedWatchlist, 'name' | 'tickers' | 'filters'>>,
+): SavedWatchlist {
+  const list = loadSavedWatchlists();
+  const idx = list.findIndex((w) => w.id === id);
+  if (idx === -1) throw new Error('Watchlist not found.');
+
+  const next: SavedWatchlist = { ...list[idx] };
+  if (patch.name !== undefined) {
+    const trimmed = patch.name.trim();
+    if (!trimmed) throw new Error('Watchlist name cannot be empty.');
+    if (nameTaken(list, trimmed, id)) throw new Error(`A watchlist named "${trimmed}" already exists.`);
+    next.name = trimmed;
+  }
+  if (patch.tickers !== undefined) next.tickers = normalizeTickers(patch.tickers);
+  if (patch.filters !== undefined) next.filters = { ...patch.filters };
+  next.updatedAt = new Date().toISOString();
+
+  const copy = [...list];
+  copy[idx] = next;
+  persistSavedWatchlists(copy);
+  return next;
+}
+
+/** Delete a watchlist. If it was the active one, fall back to the default universe. */
+export function deleteWatchlist(id: string) {
+  persistSavedWatchlists(loadSavedWatchlists().filter((w) => w.id !== id));
+  if (getActiveWatchlistId() === id) setActiveWatchlistId(null);
 }
