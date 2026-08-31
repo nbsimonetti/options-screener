@@ -1,8 +1,12 @@
 // Macro data service — fetches market-wide signals for the premium-seller dashboard.
-// Primary source: Yahoo Finance via the Vite dev-server proxy (see vite.config.ts),
-// which sidesteps Yahoo's CORS restrictions without a third-party proxy service.
+// Primary source: Yahoo Finance, reached two ways because Yahoo blocks browser CORS:
+//  - dev: live requests through the Vite dev-server proxy (see vite.config.ts)
+//  - production (GitHub Pages): a static snapshot (macro-data.json) that CI
+//    fetches server-side at build time (see scripts/fetch-macro-data.mjs and
+//    .github/workflows/deploy.yml, which rebuilds hourly during market hours)
 
 const YAHOO = '/api/yahoo/v8/finance/chart/';
+const STATIC_DATA_URL = `${import.meta.env.BASE_URL}macro-data.json`;
 
 // --- Types ---
 
@@ -99,6 +103,7 @@ function setCached<T>(key: string, value: T) {
 export function clearMacroCache() {
   localStorage.removeItem(CACHE_KEY);
   localStorage.removeItem(LS_MACRO_SNAPSHOT);
+  staticDataPromise = null; // force a re-fetch of the static snapshot in production
 }
 
 export const LS_MACRO_SNAPSHOT = 'options-screener-macro-snapshot';
@@ -148,7 +153,41 @@ interface YahooChartResult {
   };
 }
 
+interface StaticMacroData {
+  fetchedAt: string;
+  failures: string[];
+  charts: Record<string, YahooChartResult>;
+}
+
+let staticDataPromise: Promise<StaticMacroData> | null = null;
+let staticFetchedAt: string | null = null;
+
+function loadStaticData(): Promise<StaticMacroData> {
+  if (!staticDataPromise) {
+    staticDataPromise = fetch(STATIC_DATA_URL, { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`macro snapshot unavailable (${res.status})`);
+        const data: StaticMacroData = await res.json();
+        staticFetchedAt = data.fetchedAt;
+        return data;
+      })
+      .catch((e) => {
+        staticDataPromise = null; // allow retry on next refresh
+        throw e;
+      });
+  }
+  return staticDataPromise;
+}
+
 async function fetchYahooChart(symbol: string, range: string = '1y'): Promise<YahooChartResult> {
+  // Production build (static hosting): read from the CI-generated snapshot.
+  if (!import.meta.env.DEV) {
+    const data = await loadStaticData();
+    const result = data.charts[symbol];
+    if (!result || !result.meta) throw new Error(`${symbol}: not in snapshot`);
+    return result;
+  }
+
   const cacheKey = `yahoo:${symbol}:${range}`;
   const cached = getCached<YahooChartResult>(cacheKey, CACHE_TTL_MS);
   if (cached) return cached;
@@ -334,7 +373,8 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
   } : undefined;
 
   return {
-    fetchedAt: new Date().toISOString(),
+    // In production the data is only as fresh as the CI snapshot it came from.
+    fetchedAt: staticFetchedAt ?? new Date().toISOString(),
     vix,
     vix3m,
     vvix,
