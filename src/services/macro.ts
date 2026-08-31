@@ -1,8 +1,8 @@
 // Macro data service — fetches market-wide signals for the premium-seller dashboard.
-// Primary source: Yahoo Finance via corsproxy.io (no token required).
+// Primary source: Yahoo Finance via the Vite dev-server proxy (see vite.config.ts),
+// which sidesteps Yahoo's CORS restrictions without a third-party proxy service.
 
-const PROXY = 'https://corsproxy.io/?url=';
-const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+const YAHOO = '/api/yahoo/v8/finance/chart/';
 
 // --- Types ---
 
@@ -154,7 +154,7 @@ async function fetchYahooChart(symbol: string, range: string = '1y'): Promise<Ya
   if (cached) return cached;
 
   const url = `${YAHOO}${encodeURIComponent(symbol)}?interval=1d&range=${range}`;
-  const res = await fetch(PROXY + encodeURIComponent(url));
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`Yahoo ${symbol} ${res.status}`);
   const data = await res.json();
   const result = data.chart?.result?.[0];
