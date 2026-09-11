@@ -47,10 +47,86 @@ export function setCachedIVRank(ticker: string, ivRank: number, atmIV?: number, 
   setCache(cache);
 }
 
+// --- Daily ATM-IV history ledger → true IV percentile ---
+//
+// The smile-based estimate below ranks ATM IV within a single expiration's
+// strike smile — it measures smile shape, NOT where today's IV sits in this
+// ticker's own history, which is what "IV Rank" means. We therefore persist
+// one ATM-IV sample per ticker per day; once ≥ MIN_IV_SAMPLES days have
+// accrued, the true percentile takes over and the smile estimate becomes a
+// labeled fallback.
+
+const IV_HISTORY_KEY = 'options-screener-iv-history';
+const MAX_IV_SAMPLES = 260; // ~1 trading year
+export const MIN_IV_SAMPLES = 20;
+
+interface IVSample { d: string; iv: number } // d = 'YYYY-MM-DD', iv as decimal
+
+function todayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function getIVHistory(): Record<string, IVSample[]> {
+  try {
+    return JSON.parse(localStorage.getItem(IV_HISTORY_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+/** Append today's ATM-IV sample for a ticker (idempotent per day). ivDecimal e.g. 0.28. */
+export function recordDailyATMIV(ticker: string, ivDecimal: number) {
+  if (!(ivDecimal > 0)) return;
+  const key = ticker.toUpperCase();
+  const all = getIVHistory();
+  const series = all[key] ?? [];
+  const today = todayKey();
+  if (series.length > 0 && series[series.length - 1].d === today) {
+    series[series.length - 1].iv = ivDecimal;
+  } else {
+    series.push({ d: today, iv: ivDecimal });
+  }
+  all[key] = series.slice(-MAX_IV_SAMPLES);
+  try {
+    localStorage.setItem(IV_HISTORY_KEY, JSON.stringify(all));
+  } catch { /* best effort */ }
+}
+
+export function getIVSampleCount(ticker: string): number {
+  return (getIVHistory()[ticker.toUpperCase()] ?? []).length;
+}
+
+/** True IV percentile: fraction of stored daily samples below current IV. Null until enough history. */
+export function computeIVPercentile(ticker: string, currentIVDecimal: number): number | null {
+  const series = getIVHistory()[ticker.toUpperCase()] ?? [];
+  if (series.length < MIN_IV_SAMPLES || !(currentIVDecimal > 0)) return null;
+  const below = series.filter((s) => s.iv < currentIVDecimal).length;
+  return Math.round((below / series.length) * 100);
+}
+
+export type IVRankSource = 'history' | 'smile';
+
 export interface IVRankComputation {
   ivRank: number;
   atmIV: number;     // as %
   medianIV: number;  // as %
+  source?: IVRankSource;
+}
+
+/**
+ * Preferred entry point: records today's ATM-IV sample, then returns the true
+ * historical percentile when enough samples exist, else the smile estimate.
+ */
+export function resolveIVRank(ticker: string, chain: MDOption[], currentPrice: number): IVRankComputation {
+  const est = estimateIVRankFromChain(chain, currentPrice);
+  const atmDecimal = est.atmIV / 100;
+  recordDailyATMIV(ticker, atmDecimal);
+  const pct = computeIVPercentile(ticker, atmDecimal);
+  if (pct !== null) {
+    return { ...est, ivRank: pct, source: 'history' };
+  }
+  return { ...est, source: 'smile' };
 }
 
 export function estimateIVRankFromChain(

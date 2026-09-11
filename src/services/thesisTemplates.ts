@@ -102,11 +102,20 @@ function otmObs(p: OptionPosition, b: ScoreBreakdownItem): string {
 }
 
 function earningsObs(p: OptionPosition, b: ScoreBreakdownItem): string {
+  // Scans have no earnings dates — be honest about what we actually know
+  // (the chain-detected event kink) instead of claiming a clean window.
+  if (!p.nextEarningsDate) {
+    if (p.eventKink === true) {
+      return `Front-month ATM IV is 8+ vol pts above the next expiration — the chain is pricing a binary event (likely earnings) inside the window. Verify the date before entry.`;
+    }
+    if (p.eventKink === false) {
+      return `No event kink in the IV term structure — the chain is not pricing a binary catalyst inside the window. Earnings date not verified.`;
+    }
+    return `Earnings date unavailable for this scan — verify the earnings calendar before entry.`;
+  }
   const t = tier(b.normalizedScore);
   if (t === 'strong') {
-    return p.nextEarningsDate
-      ? `Earnings on ${p.nextEarningsDate} fall outside the expiration window — no binary event risk.`
-      : 'No earnings within the expiration window — eliminates gap risk.';
+    return `Earnings on ${p.nextEarningsDate} fall outside the expiration window — no binary event risk.`;
   } else if (t === 'neutral') {
     return `Earnings are near the expiration window — monitor for date changes.`;
   }

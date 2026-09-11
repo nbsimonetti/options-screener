@@ -3,10 +3,11 @@ import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info, ArrowUpDown, Arr
 import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter, SavedWatchlist } from '../types';
 import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER, LS_TABLE_SETS } from '../types';
 import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET, normalizeTickers, getSavedWatchlists, getActiveWatchlistId, setActiveWatchlistId, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/universe';
-import { scanForIdeas } from '../services/scanner';
+import { scanForIdeas, DEFAULT_SCAN_CREDITS } from '../services/scanner';
 import type { ScanCandidate } from '../services/scanner';
 import { generateTheses } from '../services/claude';
-import { getRequestCount } from '../services/marketdata';
+import { getCreditCount } from '../services/marketdata';
+import { getRemainingCredits } from '../services/creditLedger';
 import { calcAnnualizedYield } from '../scoring/engine';
 import IdeaCard from './IdeaCard';
 
@@ -89,11 +90,12 @@ function filtersEqual(a: ScanFilter, b: ScanFilter): boolean {
 }
 
 export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange, onAddToScreener }: Props) {
-  const [progress, setProgress] = useState<ScanProgress>({ phase: 'idle', current: 0, total: 0, currentTicker: '', message: '', requestsUsed: 0, requestBudget: 2000 });
+  const [progress, setProgress] = useState<ScanProgress>({ phase: 'idle', current: 0, total: 0, currentTicker: '', message: '', requestsUsed: 0, requestBudget: DEFAULT_SCAN_CREDITS });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [newTicker, setNewTicker] = useState('');
   const [error, setError] = useState('');
+  const [scanNotice, setScanNotice] = useState('');
   const [watchlistState, setWatchlistState] = useState<string[]>(() => getWatchlist());
   const [excludedState, setExcludedState] = useState<string[]>(() => getExcluded());
   const [tableSets, setTableSets] = useState<TableSets>(() => loadTableSets());
@@ -179,9 +181,20 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
     }
 
     try {
-      setProgress({ phase: 'fetching', current: 0, total: effectiveUniverse.length, currentTicker: '', message: 'Starting scan...', requestsUsed: 0, requestBudget: 2000 });
-      const scanResult = await scanForIdeas(effectiveUniverse, weights, setProgress, apiConfig.marketDataToken || undefined, effectiveFilter);
-      const usedNow = getRequestCount();
+      setScanNotice('');
+      const scanBudget = Math.min(DEFAULT_SCAN_CREDITS, getRemainingCredits());
+      setProgress({ phase: 'fetching', current: 0, total: effectiveUniverse.length, currentTicker: '', message: 'Starting scan...', requestsUsed: 0, requestBudget: scanBudget });
+      const scanResult = await scanForIdeas(effectiveUniverse, weights, setProgress, apiConfig.marketDataToken || undefined, effectiveFilter, scanBudget);
+      const usedNow = getCreditCount();
+
+      const notices: string[] = [];
+      if (scanResult.degradedToCacheOnly) {
+        notices.push('Credit budget ran low during this scan — some tickers were served from cache or skipped.');
+      }
+      if (scanResult.vetoedTickers.length > 0) {
+        notices.push(`CSP trend veto excluded ${scanResult.vetoedTickers.length} ticker${scanResult.vetoedTickers.length > 1 ? 's' : ''} with bearish structure: ${scanResult.vetoedTickers.slice(0, 4).join('; ')}${scanResult.vetoedTickers.length > 4 ? '…' : ''}`);
+      }
+      setScanNotice(notices.join(' '));
 
       // De-duplicate by position id across all three sets so Claude sees each candidate once
       const seen = new Set<string>();
@@ -194,12 +207,12 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       }
 
       if (allCandidates.length === 0) {
-        setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.', requestsUsed: usedNow, requestBudget: 2000 });
+        setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: 'No viable candidates found.', requestsUsed: usedNow, requestBudget: scanBudget });
         return;
       }
 
       const analysisType = hasClaude ? 'Claude' : 'algorithmic analysis';
-      setProgress({ phase: 'analyzing', current: allCandidates.length, total: allCandidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...`, requestsUsed: usedNow, requestBudget: 2000 });
+      setProgress({ phase: 'analyzing', current: allCandidates.length, total: allCandidates.length, currentTicker: '', message: `Generating theses via ${analysisType}...`, requestsUsed: usedNow, requestBudget: scanBudget });
 
       const newIdeas = await generateTheses(
         allCandidates,
@@ -215,11 +228,11 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
       onIdeasChange(newIdeas);
       setTableSets(newTableSets);
-      setProgress({ phase: 'complete', current: newIdeas.length, total: newIdeas.length, currentTicker: '', message: `${newIdeas.length} ideas generated · ${usedNow} API calls used`, requestsUsed: usedNow, requestBudget: 2000 });
+      setProgress({ phase: 'complete', current: newIdeas.length, total: newIdeas.length, currentTicker: '', message: `${newIdeas.length} ideas generated · ${usedNow} API credits used`, requestsUsed: usedNow, requestBudget: scanBudget });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Scan failed';
       setError(msg);
-      setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg, requestsUsed: getRequestCount(), requestBudget: 2000 });
+      setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg, requestsUsed: getCreditCount(), requestBudget: DEFAULT_SCAN_CREDITS });
     }
   }, [effectiveUniverse, effectiveFilter, mode, apiConfig, weights, hasClaude, onIdeasChange]);
 
@@ -482,7 +495,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
                 <span className={progress.requestsUsed >= 0.8 * progress.requestBudget ? 'text-amber-400 font-mono' : 'font-mono'}>
                   {progress.requestsUsed}/{progress.requestBudget}
                 </span>{' '}
-                API calls
+                API credits
               </span>
             </div>
             <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
@@ -496,7 +509,13 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
         {!isScanning && progress.phase === 'complete' && progress.requestsUsed > 0 && (
           <div className="mt-3 text-xs text-slate-500">
-            Last scan: <span className="font-mono text-slate-400">{progress.requestsUsed}</span> API calls used.
+            Last scan: <span className="font-mono text-slate-400">{progress.requestsUsed}</span> API credits used.
+          </div>
+        )}
+
+        {scanNotice && (
+          <div className="mt-2 rounded border border-amber-700/50 bg-amber-900/20 px-3 py-2 text-xs text-amber-300">
+            {scanNotice}
           </div>
         )}
 

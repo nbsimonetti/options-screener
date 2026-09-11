@@ -3,12 +3,15 @@ import type { PositionScore } from '../types';
 import { DEFAULT_SCAN_FILTER } from '../types';
 import {
   getQuote, getOptionChain, getExpirations,
-  resetRequestCount, getRequestCount, BudgetExceededError, enforceBudget,
+  resetRequestCount, getCreditCount, BudgetExceededError, enforceBudget,
+  setCreditCategory,
 } from './marketdata';
 import type { MDOption } from './marketdata';
 import { filterMDChain, mdChainToPositions } from './adapter';
-import { estimateIVRankFromChain, getCachedIVData, setCachedIVRank } from './ivRank';
+import { resolveIVRank, getCachedIVData, setCachedIVRank } from './ivRank';
 import { hasQuoteCached, hasChainCached, chainCacheKey, getCachedExpirations } from './marketdataCache';
+import { getRemainingCredits } from './creditLedger';
+import { bearishStructureVeto } from './history';
 import { scorePosition, calcAnnualizedYield } from '../scoring/engine';
 
 export interface ScanCandidate {
@@ -20,6 +23,9 @@ export interface ScanResult {
   top: ScanCandidate[];
   bestCSPByTicker: ScanCandidate[];
   bestCCByTicker: ScanCandidate[];
+  degradedToCacheOnly: boolean;
+  creditsUsed: number;
+  vetoedTickers: string[];
 }
 
 const SCAN_DELAY_MS = 700;
@@ -27,8 +33,12 @@ const MAX_EXPIRATIONS_PER_TICKER = 3;
 // NOTE: per-ticker candidate cap is now implicit — 1 best CSP + 1 best CC
 // per ticker. Applying a combined cap made CSPs consistently evict CCs
 // in low-vol markets.
-const MAX_REQUESTS_PER_TICKER = 50;
-const MAX_TOTAL_REQUESTS = 2000;
+//
+// Budgets are in CREDITS (MarketData bills 1 per option symbol returned:
+// a chain fetch with strikeLimit 20 costs ~20 credits). A full ticker is
+// quote(1) + expirations(1) + 3 expirations × 2 sides × ~20 ≈ 125 credits.
+const MAX_CREDITS_PER_TICKER = 150;
+export const DEFAULT_SCAN_CREDITS = 8000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -57,9 +67,17 @@ export async function scanForIdeas(
   onProgress: (progress: ScanProgress) => void,
   marketDataToken?: string,
   scanFilter: ScanFilter = DEFAULT_SCAN_FILTER,
+  creditBudget?: number,
 ): Promise<ScanResult> {
   resetRequestCount();
+  setCreditCategory('shortScan');
+  // Per-scan credit cap: the caller's allocation, bounded by what's left of
+  // the daily budget. When it runs out the scan DOESN'T fail — it degrades
+  // to cached-only data for the remaining tickers.
+  const scanCredits = Math.max(0, Math.min(creditBudget ?? DEFAULT_SCAN_CREDITS, getRemainingCredits()));
+  let cacheOnly = scanCredits === 0;
   const all: ScanCandidate[] = [];
+  const vetoedTickers: string[] = [];
   const total = universe.length;
   const midpointDTE = (scanFilter.minDTE + scanFilter.maxDTE) / 2;
 
@@ -70,37 +88,38 @@ export async function scanForIdeas(
       total,
       currentTicker: '',
       message: '',
-      requestsUsed: getRequestCount(),
-      requestBudget: MAX_TOTAL_REQUESTS,
+      requestsUsed: getCreditCount(),
+      requestBudget: scanCredits,
       ...partial,
     });
   };
 
-  emit({ phase: 'fetching', message: 'Starting scan...' });
+  emit({ phase: 'fetching', message: cacheOnly ? 'Daily credit budget exhausted — serving from cache only...' : 'Starting scan...' });
 
   for (let i = 0; i < universe.length; i++) {
     const ticker = universe[i];
 
-    // Global budget check
-    if (getRequestCount() >= MAX_TOTAL_REQUESTS) {
-      emit({
-        phase: 'error',
-        current: i,
-        currentTicker: ticker,
-        message: `Total request budget reached (${MAX_TOTAL_REQUESTS}). Stopping scan.`,
-      });
-      break;
+    if (!cacheOnly && getCreditCount() >= scanCredits) {
+      cacheOnly = true;
     }
+
+    // CSP trend veto (research finding: pure-IVR ranking adversely selects
+    // breaking-down names). Only applies when cached history exists.
+    const veto = bearishStructureVeto(ticker);
+    const cspVetoed = veto?.vetoed === true;
+    if (cspVetoed) vetoedTickers.push(`${ticker} (${veto!.reason})`);
 
     emit({
       phase: 'fetching',
       current: i + 1,
       currentTicker: ticker,
-      message: `Scanning ${ticker} (${i + 1}/${total})`,
+      message: cacheOnly
+        ? `Credit budget reached — ${ticker} from cache only (${i + 1}/${total})`
+        : `Scanning ${ticker} (${i + 1}/${total})`,
     });
 
-    const requestsBeforeTicker = getRequestCount();
-    const requestsThisTicker = () => getRequestCount() - requestsBeforeTicker;
+    const creditsBeforeTicker = getCreditCount();
+    const creditsThisTicker = () => getCreditCount() - creditsBeforeTicker;
 
     // Pre-check cache status for skip-delay decision
     let allCached = false;
@@ -116,21 +135,25 @@ export async function scanForIdeas(
     }
 
     try {
-      enforceBudget(MAX_TOTAL_REQUESTS);
+      // In cache-only mode, skip any ticker whose data isn't fully cached
+      // (cache reads cost nothing; fetches would blow the budget).
+      if (cacheOnly && !allCached) continue;
+      if (!cacheOnly) enforceBudget(scanCredits);
 
       const quote = await getQuote(ticker, marketDataToken);
       const price = quote.last || quote.mid || 0;
       if (!price) continue;
-      if (requestsThisTicker() >= MAX_REQUESTS_PER_TICKER) continue;
+      if (creditsThisTicker() >= MAX_CREDITS_PER_TICKER) continue;
 
       const expirations = await getExpirations(ticker, marketDataToken);
       const selectedExps = pickExpirations(expirations, scanFilter.minDTE, scanFilter.maxDTE);
       if (selectedExps.length === 0) continue;
-      if (requestsThisTicker() >= MAX_REQUESTS_PER_TICKER) continue;
+      if (creditsThisTicker() >= MAX_CREDITS_PER_TICKER) continue;
 
-      // Bound the chain fetches to what fits in the per-ticker budget
-      const remainingBudget = MAX_REQUESTS_PER_TICKER - requestsThisTicker();
-      const maxExpirationsWeCanAfford = Math.max(1, Math.floor(remainingBudget / 2));
+      // Bound the chain fetches to what fits in the per-ticker credit budget
+      // (each side-chain fetch costs ~strikeLimit = 20 credits).
+      const remainingBudget = MAX_CREDITS_PER_TICKER - creditsThisTicker();
+      const maxExpirationsWeCanAfford = Math.max(1, Math.floor(remainingBudget / 40));
       const boundedExps = selectedExps.slice(0, maxExpirationsWeCanAfford);
 
       // Use allSettled so a single failure (rate-limit, delisted, 4xx)
@@ -165,7 +188,10 @@ export async function scanForIdeas(
         )[0];
         const blend = closest ? [...closest.puts, ...closest.calls] : [];
         if (blend.length > 0) {
-          const ivData = estimateIVRankFromChain(blend, price);
+          // resolveIVRank records today's ATM-IV sample and returns the true
+          // historical percentile once enough samples exist (smile-shape
+          // estimate as a labeled fallback before that).
+          const ivData = resolveIVRank(ticker, blend, price);
           ivRank = ivData.ivRank;
           atmIV = ivData.atmIV;
           medianIV = ivData.medianIV;
@@ -175,27 +201,52 @@ export async function scanForIdeas(
         }
       }
 
+      // Event-kink detection: front-expiration ATM IV > next expiration's by
+      // 8+ vol pts ⇒ the chain is pricing a binary event (likely earnings)
+      // inside the window. Needs at least two expirations with data.
+      const atmIVForExp = (opts: MDOption[]): number => {
+        let best = 0; let bestDist = Infinity;
+        for (const o of opts) {
+          if (!(o.iv > 0)) continue;
+          const dist = Math.abs(o.strike - price);
+          if (dist < bestDist) { bestDist = dist; best = o.iv; }
+        }
+        return best;
+      };
+      let eventKink: boolean | undefined;
+      const expIVs = chainsByExp
+        .map((c) => ({ dte: dteFromDate(c.expiration), iv: atmIVForExp([...c.puts, ...c.calls]) }))
+        .filter((x) => x.iv > 0)
+        .sort((a, b) => a.dte - b.dte);
+      if (expIVs.length >= 2) {
+        eventKink = expIVs[0].iv - expIVs[1].iv > 0.08;
+      }
+
       const tickerCandidates: ScanCandidate[] = [];
       for (const { puts, calls } of chainsByExp) {
         if (puts.length === 0 && calls.length === 0) continue;
 
-        const cspFiltered = filterMDChain(puts, quote, {
-          strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40,
-          minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
-          minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
-        });
-        const cspPositions = mdChainToPositions(cspFiltered, quote, 'CSP', ivRank, '', atmIV, medianIV);
-        const cspScored = cspPositions
-          .map((pos) => ({ position: pos, score: scorePosition(pos, weights) }))
-          .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
-        if (cspScored[0]) tickerCandidates.push(cspScored[0]);
+        if (!cspVetoed) {
+          const cspFiltered = filterMDChain(puts, quote, {
+            strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40,
+            minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
+            minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
+          });
+          const cspPositions = mdChainToPositions(cspFiltered, quote, 'CSP', ivRank, '', atmIV, medianIV)
+            .map((pos) => ({ ...pos, eventKink }));
+          const cspScored = cspPositions
+            .map((pos) => ({ position: pos, score: scorePosition(pos, weights) }))
+            .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
+          if (cspScored[0]) tickerCandidates.push(cspScored[0]);
+        }
 
         const ccFiltered = filterMDChain(calls, quote, {
           strategy: 'CC', minDelta: 0.10, maxDelta: 0.40,
           minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
           minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
         });
-        const ccPositions = mdChainToPositions(ccFiltered, quote, 'CC', ivRank, '', atmIV, medianIV);
+        const ccPositions = mdChainToPositions(ccFiltered, quote, 'CC', ivRank, '', atmIV, medianIV)
+          .map((pos) => ({ ...pos, eventKink }));
         const ccScored = ccPositions
           .map((pos) => ({ position: pos, score: scorePosition(pos, weights) }))
           .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
@@ -217,13 +268,9 @@ export async function scanForIdeas(
       if (bestCC) all.push(bestCC);
     } catch (e) {
       if (e instanceof BudgetExceededError) {
-        emit({
-          phase: 'error',
-          current: i,
-          currentTicker: ticker,
-          message: `Total request budget reached (${MAX_TOTAL_REQUESTS}). Stopping scan.`,
-        });
-        break;
+        // Don't fail the scan — degrade to cached-only for the remainder.
+        cacheOnly = true;
+        continue;
       }
       // Skip tickers that fail for other reasons
     }
@@ -244,9 +291,10 @@ export async function scanForIdeas(
     csps: allCSPCount,
     ccs: allCCCount,
     uniqueTickers: uniqueTickers.size,
-    apiRequestsUsed: getRequestCount(),
-    budgetLimit: MAX_TOTAL_REQUESTS,
-    budgetExhausted: getRequestCount() >= MAX_TOTAL_REQUESTS,
+    creditsUsed: getCreditCount(),
+    creditBudget: scanCredits,
+    degradedToCacheOnly: cacheOnly,
+    cspTrendVetoes: vetoedTickers,
   });
 
   // Sort the full candidate pool once by composite score
@@ -294,5 +342,8 @@ export async function scanForIdeas(
     top,
     bestCSPByTicker: [...bestCSPByTicker.values()].sort((a, b) => b.score.compositeScore - a.score.compositeScore),
     bestCCByTicker: [...bestCCByTicker.values()].sort((a, b) => b.score.compositeScore - a.score.compositeScore),
+    degradedToCacheOnly: cacheOnly,
+    creditsUsed: getCreditCount(),
+    vetoedTickers,
   };
 }

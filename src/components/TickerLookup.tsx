@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { Search, Loader2, Plus, Filter } from 'lucide-react';
 import type { APIConfig, OptionPosition, ChainFilter, StrategyType } from '../types';
 import { DEFAULT_CHAIN_FILTER } from '../types';
-import { getQuote, getOptionChain } from '../services/marketdata';
+import { getQuote, getOptionChain, setCreditCategory } from '../services/marketdata';
 import type { MDQuote, MDOption } from '../services/marketdata';
 import { estimateIVRankFromChain, getCachedIVData, setCachedIVRank } from '../services/ivRank';
 import { filterMDChain, mdChainToPositions } from '../services/adapter';
@@ -39,6 +39,7 @@ export default function TickerLookup({ apiConfig, onImport }: Props) {
     setSelected(new Set());
 
     try {
+      setCreditCategory('lookup');
       const q = await getQuote(ticker, token);
       setQuote(q);
       await loadChain(q);

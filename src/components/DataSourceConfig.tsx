@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Settings, Eye, EyeOff, ExternalLink, Trash2 } from 'lucide-react';
+import { Settings, Eye, EyeOff, ExternalLink, Trash2, Gauge } from 'lucide-react';
 import type { APIConfig } from '../types';
 import { clearMarketDataCache, getCacheStats } from '../services/marketdataCache';
+import { getLedger, getDailyCreditBudget, setDailyCreditBudget, PLAN_PRESETS } from '../services/creditLedger';
 
 interface Props {
   config: APIConfig;
@@ -67,9 +68,11 @@ export default function DataSourceConfig({ config, onChange }: Props) {
               </button>
             </div>
             <p className="text-[10px] text-slate-600">
-              Free signup, no credit card. Without a token, only AAPL works as a demo. With a token, all tickers are available (100 req/day free).
+              Free signup, no credit card. Without a token, only AAPL works as a demo. Billing is per <em>option symbol returned</em> — one chain fetch costs ~20 credits, not 1. Free plan: 100 credits/day; Starter: 10,000/day.
             </p>
           </div>
+
+          <CreditBudgetControls />
 
           {/* Claude section */}
           <div className="space-y-2">
@@ -112,6 +115,52 @@ export default function DataSourceConfig({ config, onChange }: Props) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CreditBudgetControls() {
+  const [, setTick] = useState(0);
+  const ledger = getLedger();
+  const budget = getDailyCreditBudget();
+  const usedPct = Math.min(100, (ledger.total / budget) * 100);
+  const barColor = usedPct >= 90 ? 'bg-red-500' : usedPct >= 70 ? 'bg-amber-500' : 'bg-emerald-500';
+
+  const setBudget = (v: number) => {
+    if (Number.isFinite(v) && v > 0) {
+      setDailyCreditBudget(v);
+      setTick((t) => t + 1);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-emerald-400 flex items-center gap-1">
+          <Gauge className="h-3.5 w-3.5" /> Daily Credit Budget
+        </span>
+        <select
+          className="rounded bg-slate-800 border border-slate-600 px-2 py-1 text-[11px] text-slate-300"
+          value={PLAN_PRESETS.some((p) => p.value === budget) ? budget : ''}
+          onChange={(e) => setBudget(Number(e.target.value))}
+          aria-label="Plan preset"
+        >
+          {!PLAN_PRESETS.some((p) => p.value === budget) && <option value="">Custom ({budget.toLocaleString()})</option>}
+          {PLAN_PRESETS.map((p) => (
+            <option key={p.value} value={p.value}>{p.label}</option>
+          ))}
+        </select>
+      </div>
+      <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${barColor}`} style={{ width: `${usedPct}%` }} />
+      </div>
+      <p className="text-[10px] text-slate-600">
+        Today: <span className="font-mono text-slate-400">{ledger.total.toLocaleString()}</span> / {budget.toLocaleString()} credits
+        {ledger.total > 0 && (
+          <> &middot; scans {ledger.byCategory.shortScan + ledger.byCategory.longScan} &middot; marking {ledger.byCategory.marking} &middot; lookups {ledger.byCategory.lookup + ledger.byCategory.other}</>
+        )}
+        . Marking open paper positions is funded first; scans degrade to cached data when the budget runs low.
+      </p>
     </div>
   );
 }

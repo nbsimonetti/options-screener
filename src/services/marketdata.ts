@@ -1,28 +1,47 @@
+import { recordCredits, type CreditCategory } from './creditLedger';
+
 const BASE = 'https://api.marketdata.app/v1';
 
-// --- Request counter ---
+// --- Credit counter ---
+//
+// MarketData.app bills per SYMBOL RETURNED, not per HTTP request: an option
+// chain with strikeLimit 20 costs ~20 credits. Session counters below track
+// real credits; creditLedger.ts persists the daily total across sessions.
 
-let requestCount = 0;
-let requestCountListener: ((n: number) => void) | null = null;
+let requestCount = 0; // HTTP requests this session (diagnostics only)
+let creditCount = 0;  // billed credits this session — the number that matters
+let creditListener: ((credits: number) => void) | null = null;
+
+// Category attributed to credits spent by subsequent fetches (scans/marking
+// set this around their work; default 'other').
+let activeCategory: CreditCategory = 'other';
+export function setCreditCategory(cat: CreditCategory) {
+  activeCategory = cat;
+}
 
 export function resetRequestCount() {
   requestCount = 0;
-  requestCountListener?.(0);
+  creditCount = 0;
+  creditListener?.(0);
 }
 
 export function getRequestCount(): number {
   return requestCount;
 }
 
-export function onRequestCountChange(cb: ((n: number) => void) | null) {
-  requestCountListener = cb;
+export function getCreditCount(): number {
+  return creditCount;
+}
+
+export function onRequestCountChange(cb: ((credits: number) => void) | null) {
+  creditListener = cb;
 }
 
 export class BudgetExceededError extends Error {
   limit: number;
   used: number;
   constructor(limit: number, used: number) {
-    super(`API request budget exceeded: ${used}/${limit}`);
+    super(`API credit budget exceeded: ${used}/${limit}`);
     this.name = 'BudgetExceededError';
     this.limit = limit;
     this.used = used;
@@ -30,9 +49,15 @@ export class BudgetExceededError extends Error {
 }
 
 export function enforceBudget(limit: number) {
-  if (requestCount >= limit) {
-    throw new BudgetExceededError(limit, requestCount);
+  if (creditCount >= limit) {
+    throw new BudgetExceededError(limit, creditCount);
   }
+}
+
+function tallyCredits(n: number) {
+  creditCount += n;
+  recordCredits(n, activeCategory);
+  creditListener?.(creditCount);
 }
 
 async function mdFetch<T>(path: string, params?: Record<string, string>, token?: string): Promise<T> {
@@ -43,14 +68,19 @@ async function mdFetch<T>(path: string, params?: Record<string, string>, token?:
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (token) headers.Authorization = `Token ${token}`;
 
-  const res = await fetch(url.toString(), { headers });
+  let res = await fetch(url.toString(), { headers });
+  if (res.status === 429) {
+    // Rate-limited: single retry after a short backoff instead of silently
+    // failing the ticker.
+    await new Promise((r) => setTimeout(r, 1500));
+    res = await fetch(url.toString(), { headers });
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`MarketData API ${res.status}: ${text}`);
   }
   const data = await res.json();
   requestCount += 1;
-  requestCountListener?.(requestCount);
   return data;
 }
 
@@ -174,6 +204,7 @@ export async function getQuote(ticker: string, token?: string): Promise<MDQuote>
   if (cached) return cached;
 
   const data = await mdFetch<MDQuoteResponse>(`/stocks/quotes/${upper}/`, {}, token);
+  tallyCredits(1);
   if (data.s !== 'ok') throw new Error(`No quote data for ${ticker}`);
 
   const quote: MDQuote = {
@@ -197,6 +228,7 @@ export async function getExpirations(ticker: string, token?: string): Promise<st
   if (cached) return cached;
 
   const data = await mdFetch<MDExpirationsResponse>(`/options/expirations/${upper}/`, {}, token);
+  tallyCredits(1);
   if (data.s !== 'ok' || !data.expirations) return [];
   setCachedExpirations(upper, data.expirations);
   return data.expirations;
@@ -220,6 +252,62 @@ export async function getOptionChain(
 
   const data = await mdFetch<MDChainResponse>(`/options/chain/${upper}/`, qp, token);
   const chain = chainToRows(data);
+  // Chain requests bill 1 credit PER OPTION SYMBOL RETURNED.
+  tallyCredits(Math.max(1, chain.length));
   setCachedChain(key, chain);
   return chain;
+}
+
+// --- Single option quote (used by the paper-trading engine to mark open
+// positions at 1 credit per contract instead of refetching whole chains) ---
+
+export interface MDOptionQuote {
+  optionSymbol: string;
+  bid: number;
+  ask: number;
+  mid: number;
+  last: number;
+  volume: number;
+  openInterest: number;
+  iv: number;
+  delta: number;
+  underlyingPrice: number;
+  dte: number;
+  updated: number;
+}
+
+interface MDOptionQuoteResponse {
+  s: string;
+  optionSymbol: string[];
+  bid: number[];
+  ask: number[];
+  mid: number[];
+  last: number[];
+  volume: number[];
+  openInterest: number[];
+  iv: number[];
+  delta: number[];
+  underlyingPrice: number[];
+  dte: number[];
+  updated: number[];
+}
+
+export async function getOptionQuote(optionSymbol: string, token?: string): Promise<MDOptionQuote | null> {
+  const data = await mdFetch<MDOptionQuoteResponse>(`/options/quotes/${optionSymbol}/`, {}, token);
+  tallyCredits(1);
+  if (data.s !== 'ok' || !data.optionSymbol?.length) return null;
+  return {
+    optionSymbol: data.optionSymbol[0],
+    bid: data.bid[0] ?? 0,
+    ask: data.ask[0] ?? 0,
+    mid: data.mid[0] ?? 0,
+    last: data.last[0] ?? 0,
+    volume: data.volume[0] ?? 0,
+    openInterest: data.openInterest[0] ?? 0,
+    iv: data.iv[0] ?? 0,
+    delta: data.delta[0] ?? 0,
+    underlyingPrice: data.underlyingPrice[0] ?? 0,
+    dte: data.dte[0] ?? 0,
+    updated: data.updated[0] ?? 0,
+  };
 }

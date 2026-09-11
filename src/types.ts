@@ -25,6 +25,13 @@ export interface OptionPosition {
   openInterest: number;
   nextEarningsDate: string;
   contractSize: number;
+  // Preserved from the raw chain for position marking / delta math.
+  signedDelta?: number;
+  optionSymbol?: string;
+  // Chain-detected binary-event kink: front-expiration ATM IV exceeds the
+  // next expiration's by > 8 vol pts (almost always earnings). undefined =
+  // insufficient data to tell.
+  eventKink?: boolean;
 }
 
 export interface ScoringWeights {
@@ -158,7 +165,7 @@ export function createEmptyPosition(): OptionPosition {
 
 // --- AI Idea Generator ---
 
-export type AppView = 'screener' | 'ideas' | 'macro';
+export type AppView = 'screener' | 'ideas' | 'ideasLong' | 'macro' | 'paper';
 
 export interface IdeaThesis {
   summary: string;
@@ -213,6 +220,139 @@ export const DEFAULT_SCAN_FILTER: ScanFilter = {
 };
 
 export const LS_SCAN_FILTER = 'options-screener-scan-filter';
+
+// --- Long Strategy (Idea Generator (Long)) ---
+// Design: docs/LONG_STRATEGY_DESIGN.md. LC = long call, LP = long put.
+
+export type LongStrategyType = 'LC' | 'LP';
+
+export type EntryTrigger = 'breakout' | 'pullback' | 'post-event';
+
+export interface FactorScore {
+  key: string;
+  label: string;
+  rawValue: number;
+  rawUnit: string;
+  score: number;   // 0-100
+  weight: number;  // %
+}
+
+export interface LongContract {
+  optionSymbol: string;
+  side: 'call' | 'put';
+  strike: number;
+  expirationDate: string; // ISO
+  dte: number;
+  bid: number;
+  ask: number;
+  mid: number;            // the debit per share at entry pricing
+  delta: number;          // signed
+  iv: number;             // %
+  theta: number;
+  vega: number;
+  volume: number;
+  openInterest: number;
+  extrinsicPct: number;   // extrinsic / premium
+}
+
+export interface LongIdea {
+  id: string;
+  ticker: string;
+  direction: LongStrategyType;
+  currentPrice: number;
+  compositeScore: number;      // directional factor composite 0-100
+  overallScore: number;        // blended display score (factors + vol + liquidity + EM)
+  factors: FactorScore[];
+  contract: LongContract;
+  // Vol context
+  ivRank: number;
+  ivRankSource: 'history' | 'smile';
+  hv20: number;                // annualized %
+  hv60: number;
+  ivHvRatio: number;
+  emRatio: number;             // implied expected move / median historical move
+  // Trading-rule context the paper engine consumes (docs/LONG_STRATEGY_DESIGN.md §3)
+  entryTrigger: EntryTrigger | null;
+  triggerDate: string | null;  // ISO date the trigger fired
+  sigRef: number;              // signal reference level for the R10 stop
+  atr: number;                 // ATR14 at scan time
+  stopLevel: number;           // R10 underlying stop
+  flags: string[];             // Stage-6 warnings
+  tier: 'trade' | 'watchlist';
+  generatedAt: string;
+}
+
+export const LS_LONG_IDEAS = 'options-screener-long-ideas';
+
+// --- Paper Trades ---
+
+export type PaperKind = 'LC' | 'LP' | 'CSP';
+
+export interface PaperPosition {
+  id: string;
+  kind: PaperKind;
+  ticker: string;
+  optionSymbol: string;
+  contracts: number;
+  strike: number;
+  expirationDate: string;      // ISO
+  openedAt: string;            // ISO datetime
+  entryUnderlying: number;
+  entryMid: number;            // per share
+  entryDebit: number;          // total $ paid (negative = credit received)
+  entryDelta: number;          // signed, per share
+  entryScore: number;
+  sigRef: number;              // long-side R10 stop inputs
+  atrEntry: number;
+  stopLevel: number;
+  riskAtEntry: number;         // $ risk used for sizing (debit for longs, 2σ stress for CSP)
+  collateral: number;          // $ reserved (CSP strike×100×n; 0 for longs)
+  spreadPctAtEntry: number;    // slippage-risk caveat: (ask-bid)/mid at fill time
+  lastMark: number;            // per-share mid
+  lastMarkDate: string;        // ISO date
+  lastUnderlying: number;
+  highestClose: number;        // for R9 trailing stop after scale-out
+  scaledOut: boolean;
+}
+
+export interface PaperClosedTrade {
+  id: string;
+  kind: PaperKind;
+  ticker: string;
+  optionSymbol: string;
+  contracts: number;
+  strike: number;
+  openedAt: string;
+  closedAt: string;
+  entryMid: number;
+  exitMid: number;
+  pnl: number;                 // total $
+  riskAtEntry: number;
+  exitRule: string;            // which rule closed it (R8..R13 / S-rules)
+  entryScore: number;
+}
+
+export interface PaperJournalEntry {
+  at: string;                  // ISO datetime
+  action: 'MARK' | 'OPEN' | 'CLOSE' | 'SCALE_OUT' | 'SKIP' | 'VETO' | 'INFO' | 'ERROR';
+  ticker?: string;
+  rule?: string;
+  detail: string;
+}
+
+export interface PaperPortfolio {
+  version: 1;
+  createdAt: string;
+  cash: number;
+  positions: PaperPosition[];
+  closedTrades: PaperClosedTrade[];
+  equityHistory: { d: string; equity: number; carried?: boolean }[]; // one per marking day
+  journal: PaperJournalEntry[];
+  lastCycleAt: string | null;
+}
+
+export const PAPER_STARTING_CAPITAL = 50000;
+export const LS_PAPER_PORTFOLIO = 'options-screener-paper-portfolio-v1';
 
 // --- Saved Watchlists ---
 // A named, reusable list of tickers plus its own scan filters. When a watchlist

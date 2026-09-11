@@ -20,8 +20,13 @@ export function calcAnnualizedYield(pos: OptionPosition): number {
 
 export function scoreAnnualizedYield(pos: OptionPosition): { raw: number; score: number } {
   const raw = calcAnnualizedYield(pos);
-  const score = linearScale(raw, 0, 0.50);
-  return { raw, score };
+  // Saturating curve replaces the old linear 0→50% map: 10%→~43, 20%→~67,
+  // 30%→~81, 50%→~94. Extra yield above ~25% annualized has diminishing
+  // value, and extreme yields usually signal assignment-certain setups —
+  // taper above 60% instead of rewarding it.
+  let score = 100 * (1 - Math.exp(-raw / 0.18));
+  if (raw > 0.60) score = Math.max(50, score - (raw - 0.60) * 100);
+  return { raw, score: clamp(score, 0, 100) };
 }
 
 export function scoreDelta(pos: OptionPosition): { raw: number; score: number } {
@@ -74,7 +79,16 @@ export function scoreOtmDistance(pos: OptionPosition): { raw: number; score: num
 }
 
 export function scoreEarningsProximity(pos: OptionPosition): { raw: number; score: number } {
-  if (!pos.nextEarningsDate) return { raw: Infinity, score: 100 };
+  if (!pos.nextEarningsDate) {
+    // No earnings date available (scans never have one). Previously this
+    // scored a flat 100 — silently asserting "no earnings risk" for every
+    // scanned idea. Use the chain-detected event kink instead: front ATM IV
+    // > next-expiration ATM IV by 8+ vol pts almost always means a binary
+    // event (earnings) inside the window.
+    if (pos.eventKink === true) return { raw: NaN, score: 30 };
+    if (pos.eventKink === false) return { raw: NaN, score: 75 };
+    return { raw: NaN, score: 50 }; // unknown — neutral, not a free pass
+  }
   const now = new Date();
   const earnings = new Date(pos.nextEarningsDate);
   const daysUntilEarnings = (earnings.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
