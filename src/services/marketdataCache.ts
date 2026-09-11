@@ -4,9 +4,13 @@ const QUOTE_CACHE_KEY = 'options-screener-quote-cache';
 const EXPIRATIONS_CACHE_KEY = 'options-screener-expirations-cache';
 const CHAIN_CACHE_KEY = 'options-screener-chain-cache';
 
-const QUOTE_TTL_MS = 15 * 60 * 1000;            // 15 min
-const EXPIRATIONS_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
-const CHAIN_TTL_MS = 60 * 60 * 1000;            // 1 hour
+// TTLs audited against how fast each data type actually goes stale
+// (docs/API_BUDGET.md): quotes move in minutes; the expirations LIST only
+// changes when new weeklies/monthlies list (~weekly), so 3 days is safe and
+// saves 1 credit/ticker/scan; chains reprice intraday — 1 hour stands.
+const QUOTE_TTL_MS = 15 * 60 * 1000;                // 15 min
+const EXPIRATIONS_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const CHAIN_TTL_MS = 60 * 60 * 1000;                // 1 hour
 
 const MAX_CHAIN_ENTRIES = 100;
 

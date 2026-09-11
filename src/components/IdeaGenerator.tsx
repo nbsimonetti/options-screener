@@ -7,7 +7,8 @@ import { scanForIdeas, DEFAULT_SCAN_CREDITS } from '../services/scanner';
 import type { ScanCandidate } from '../services/scanner';
 import { generateTheses } from '../services/claude';
 import { getCreditCount } from '../services/marketdata';
-import { getRemainingCredits } from '../services/creditLedger';
+import { allocateBudget } from '../services/creditLedger';
+import { loadPortfolio } from '../services/paperEngine';
 import { calcAnnualizedYield } from '../scoring/engine';
 import IdeaCard from './IdeaCard';
 
@@ -182,7 +183,10 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
     try {
       setScanNotice('');
-      const scanBudget = Math.min(DEFAULT_SCAN_CREDITS, getRemainingCredits());
+      // Allocation policy (docs/API_BUDGET.md): marking open paper positions
+      // is funded first, lookups get a reserve, scans split the remainder.
+      const alloc = allocateBudget(loadPortfolio().positions.length);
+      const scanBudget = Math.min(DEFAULT_SCAN_CREDITS, alloc.shortScan);
       setProgress({ phase: 'fetching', current: 0, total: effectiveUniverse.length, currentTicker: '', message: 'Starting scan...', requestsUsed: 0, requestBudget: scanBudget });
       const scanResult = await scanForIdeas(effectiveUniverse, weights, setProgress, apiConfig.marketDataToken || undefined, effectiveFilter, scanBudget);
       const usedNow = getCreditCount();

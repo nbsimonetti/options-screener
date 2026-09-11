@@ -4,7 +4,8 @@ import type { APIConfig, LongIdea, ScanProgress } from '../types';
 import { getUniverse } from '../services/universe';
 import { scanForLongIdeas, DEFAULT_LONG_SCAN_CREDITS } from '../services/longScanner';
 import { historyAvailable } from '../services/history';
-import { getRemainingCredits } from '../services/creditLedger';
+import { allocateBudget } from '../services/creditLedger';
+import { loadPortfolio } from '../services/paperEngine';
 import { getCreditCount } from '../services/marketdata';
 import { formatCurrency } from '../utils/formatting';
 
@@ -42,7 +43,8 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
     setNotice('');
     setExpandedId(null);
     try {
-      const budget = Math.min(DEFAULT_LONG_SCAN_CREDITS, getRemainingCredits());
+      const alloc = allocateBudget(loadPortfolio().positions.length);
+      const budget = Math.min(DEFAULT_LONG_SCAN_CREDITS, alloc.longScan);
       setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting long scan...', requestsUsed: 0, requestBudget: budget });
       const result = await scanForLongIdeas(universe, setProgress, apiConfig.marketDataToken || undefined, budget);
       onIdeasChange(result.ideas);
