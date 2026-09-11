@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:\\Users\\NICKSI~1\\Desktop\\PERSON~1\\OPTION~1\\run-dev.cmd",
       "runtimeArgs": [],
       "port": 5173
+    },
+    {
+      "name": "options-screener-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "preview"],
+      "port": 4173
     }
   ]
 }

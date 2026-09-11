@@ -10,7 +10,7 @@ import {
   resetRequestCount, getCreditCount, BudgetExceededError, enforceBudget, setCreditCategory,
 } from './marketdata';
 import type { MDOption } from './marketdata';
-import { fetchHistory, historyAvailable, HistoryUnavailableError, type DailyBars } from './history';
+import { fetchHistory, HistoryUnavailableError, type DailyBars } from './history';
 import {
   computeBullish, computeBearish, detectEntryTrigger,
   atr14, historicalVol, avgAbsDailyReturn, medianHistoricalMove, sma,
@@ -105,12 +105,6 @@ export async function scanForLongIdeas(
   marketDataToken?: string,
   creditBudget?: number,
 ): Promise<LongScanResult> {
-  if (!historyAvailable()) {
-    throw new HistoryUnavailableError(
-      'The Long scanner needs underlying price history (Yahoo via the dev-server proxy). Run the app with the local dev server.',
-    );
-  }
-
   resetRequestCount();
   setCreditCategory('longScan');
   const scanCredits = Math.max(0, Math.min(creditBudget ?? DEFAULT_LONG_SCAN_CREDITS, getRemainingCredits()));
@@ -128,7 +122,15 @@ export async function scanForLongIdeas(
   };
 
   emit({ message: 'Fetching benchmark history (SPY + sectors)...' });
-  const spy = await fetchHistory('SPY').catch(() => null);
+  // Preflight: if the history source itself is unavailable (missing snapshot
+  // on the static build), fail the scan loudly instead of 51 cryptic skips.
+  let spy: DailyBars | null;
+  try {
+    spy = await fetchHistory('SPY');
+  } catch (e) {
+    if (e instanceof HistoryUnavailableError) throw e;
+    spy = null;
+  }
   const sectorBars = new Map<string, DailyBars | null>();
 
   for (let i = 0; i < universe.length; i++) {

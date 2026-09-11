@@ -1,7 +1,10 @@
-// Underlying daily OHLCV history — Yahoo Finance via the Vite dev proxy
-// (same path the Macro tab uses; zero MarketData credits). Only available in
-// dev mode: the static GitHub Pages build has no proxy, so callers must
-// degrade gracefully (historyAvailable() === false).
+// Underlying daily OHLCV history — zero MarketData credits either way:
+//  - dev: live Yahoo Finance via the Vite dev proxy (same path as Macro)
+//  - production (GitHub Pages): a CI-baked static snapshot
+//    (history-data.json, built by scripts/fetch-history-data.mjs and
+//    refreshed hourly during market hours — daily bars only change daily,
+//    so the snapshot is effectively current). Custom watchlist tickers
+//    outside the default universe are only available in dev.
 
 export interface DailyBars {
   ticker: string;
@@ -51,8 +54,45 @@ function writeCache(cache: Record<string, CacheEntry>) {
   }
 }
 
+// --- Static snapshot (production) ---
+
+interface CompactBars {
+  t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[];
+}
+
+interface StaticHistoryFile {
+  fetchedAt: string;
+  failures: string[];
+  bars: Record<string, CompactBars>;
+}
+
+const STATIC_HISTORY_URL = `${import.meta.env.BASE_URL}history-data.json`;
+let staticHistoryPromise: Promise<StaticHistoryFile | null> | null = null;
+
+function loadStaticHistory(): Promise<StaticHistoryFile | null> {
+  if (!staticHistoryPromise) {
+    staticHistoryPromise = fetch(STATIC_HISTORY_URL)
+      .then((res) => (res.ok ? (res.json() as Promise<StaticHistoryFile>) : null))
+      .catch(() => null);
+  }
+  return staticHistoryPromise;
+}
+
+export function historySource(): 'live-proxy' | 'static-snapshot' {
+  return import.meta.env.DEV ? 'live-proxy' : 'static-snapshot';
+}
+
+/** ISO timestamp of the production snapshot, or null (dev / snapshot missing). */
+export async function getHistorySnapshotAge(): Promise<string | null> {
+  if (import.meta.env.DEV) return null;
+  const snap = await loadStaticHistory();
+  return snap?.fetchedAt ?? null;
+}
+
 export function historyAvailable(): boolean {
-  return import.meta.env.DEV;
+  // Dev has the live proxy; production has the CI snapshot. Whether the
+  // snapshot actually loads is discovered on first fetchHistory call.
+  return true;
 }
 
 /** Cached bars only — never triggers a network request. */
@@ -67,10 +107,34 @@ export async function fetchHistory(ticker: string): Promise<DailyBars> {
   const cached = getCachedHistory(upper);
   if (cached) return cached;
 
-  if (!historyAvailable()) {
-    throw new HistoryUnavailableError(
-      'Underlying history requires the local dev server (Yahoo proxy). Factor scanning is unavailable on the static build.',
-    );
+  // Production: serve from the CI-baked snapshot (and write it into the same
+  // localStorage cache so sync consumers like bearishStructureVeto see it).
+  if (!import.meta.env.DEV) {
+    const snap = await loadStaticHistory();
+    if (!snap) {
+      throw new HistoryUnavailableError(
+        'history-data.json is missing from this deploy — re-run the GitHub Pages workflow (it bakes the history snapshot), or use the local dev server.',
+      );
+    }
+    const compact = snap.bars[upper];
+    if (!compact) {
+      throw new HistoryUnavailableError(
+        `${upper} is not in the static history snapshot (default universe + sector ETFs only) — scan custom tickers via the local dev server.`,
+      );
+    }
+    const bars: DailyBars = {
+      ticker: upper,
+      timestamps: compact.t,
+      opens: compact.o,
+      highs: compact.h,
+      lows: compact.l,
+      closes: compact.c,
+      volumes: compact.v,
+    };
+    const cache = readCache();
+    cache[upper] = { value: bars, timestamp: Date.now() };
+    writeCache(cache);
+    return bars;
   }
 
   const url = `${YAHOO}${encodeURIComponent(upper)}?interval=1d&range=2y`;

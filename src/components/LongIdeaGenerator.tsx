@@ -3,7 +3,7 @@ import { TrendingUp, TrendingDown, Loader2, Rocket, Info, ChevronDown, ChevronRi
 import type { APIConfig, LongIdea, ScanProgress } from '../types';
 import { getUniverse } from '../services/universe';
 import { scanForLongIdeas, DEFAULT_LONG_SCAN_CREDITS } from '../services/longScanner';
-import { historyAvailable } from '../services/history';
+import { historySource, getHistorySnapshotAge } from '../services/history';
 import { allocateBudget } from '../services/creditLedger';
 import { loadPortfolio } from '../services/paperEngine';
 import { getCreditCount } from '../services/marketdata';
@@ -35,7 +35,6 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
   const [showSkips, setShowSkips] = useState(false);
   const [skips, setSkips] = useState<string[]>([]);
 
-  const devMode = historyAvailable();
   const universe = getUniverse();
 
   const runScan = useCallback(async () => {
@@ -52,6 +51,13 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
       const notices: string[] = [];
       if (result.degradedToCacheOnly) notices.push('Credit budget ran low — some qualified tickers were skipped at the options stage.');
       if (result.ideas.length === 0) notices.push('No candidates cleared the funnel — long premium demands cheap vol AND directional structure, so an empty day is normal.');
+      if (historySource() === 'static-snapshot') {
+        const fetchedAt = await getHistorySnapshotAge();
+        if (fetchedAt) {
+          const ageDays = (Date.now() - new Date(fetchedAt).getTime()) / 86400000;
+          if (ageDays > 2) notices.push(`History snapshot is ${ageDays.toFixed(0)} days old (CI refreshes it hourly during market hours — check the deploy workflow).`);
+        }
+      }
       setNotice(notices.join(' '));
       setProgress({ phase: 'complete', current: result.ideas.length, total: result.ideas.length, currentTicker: '', message: `${result.ideas.length} long ideas · ${result.creditsUsed} credits used`, requestsUsed: result.creditsUsed, requestBudget: budget });
     } catch (e) {
@@ -76,7 +82,7 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
           </h2>
           <button
             onClick={runScan}
-            disabled={isScanning || !devMode}
+            disabled={isScanning}
             className="flex items-center gap-2 rounded bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {isScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
@@ -95,15 +101,6 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
             (momentum, trend quality, relative strength). Full spec in <span className="font-mono">docs/LONG_STRATEGY_DESIGN.md</span>.
           </p>
         </div>
-
-        {!devMode && (
-          <div className="mt-3 flex items-center gap-2 rounded border border-amber-700/50 bg-amber-900/20 p-3">
-            <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
-            <p className="text-xs text-amber-300">
-              Factor scanning needs underlying price history from the Yahoo dev proxy — run the app via the local dev server.
-            </p>
-          </div>
-        )}
 
         {isScanning && (
           <div className="mt-3 space-y-1">

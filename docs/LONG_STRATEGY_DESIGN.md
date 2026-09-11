@@ -86,4 +86,4 @@ Changes applied to the short/income tool, with old → new and the finding that 
 
 ## 6. Data-source note
 
-Underlying daily history comes from Yahoo Finance through the Vite dev proxy at zero MarketData credit cost (same path the Macro tab uses). On the static GitHub Pages build the proxy is absent: the Long tab detects this and reports that factor scanning requires the local dev server; the Short tab and Screener are unaffected. All history is cached in localStorage with a 1-day TTL.
+Underlying daily history costs zero MarketData credits on both builds: in dev it comes live from Yahoo through the Vite proxy (same path the Macro tab uses); on the static GitHub Pages build it comes from a CI-baked snapshot (`history-data.json`, built by `scripts/fetch-history-data.mjs`, refreshed hourly during market hours — daily bars only change once a day, so the snapshot is effectively current). The snapshot covers the default universe plus the sector ETFs; custom watchlist tickers outside it are only scannable via the dev server, and the scanner says so per ticker. All history is cached in localStorage with a ~1-day TTL.

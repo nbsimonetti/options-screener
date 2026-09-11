@@ -36,6 +36,10 @@ jobs:
       # keeping the previously published data live.
       - run: node scripts/fetch-macro-data.mjs
 
+      # 2y daily OHLCV snapshot (history-data.json) so the Long-strategy
+      # factor scanner works on the static site without the dev proxy.
+      - run: node scripts/fetch-history-data.mjs
+
       - run: npm run build
 
       - uses: actions/configure-pages@v5

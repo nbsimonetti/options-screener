@@ -185,7 +185,7 @@ function CacheControls() {
         <Trash2 className="h-3 w-3" /> Clear market data cache ({total})
       </button>
       <p className="text-[10px] text-slate-600 mt-1">
-        Quotes cached 15min &middot; expirations 1 day &middot; chains 1 hour.
+        Quotes cached 15min &middot; expirations 3 days &middot; chains 1 hour.
         {total > 0 && ` Current: ${stats.quotes} quotes, ${stats.expirations} expirations, ${stats.chains} chains.`}
       </p>
     </div>
