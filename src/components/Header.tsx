@@ -1,4 +1,4 @@
-import { TrendingUp, BarChart3, Sparkles, Gauge } from 'lucide-react';
+import { TrendingUp, BarChart3, Sparkles, Gauge, Rocket, FlaskConical } from 'lucide-react';
 import type { AppView } from '../types';
 
 interface Props {
@@ -29,8 +29,14 @@ export default function Header({ activeView, onViewChange }: Props) {
           <button className={tabClass('screener')} onClick={() => onViewChange('screener')}>
             <BarChart3 className="h-4 w-4" /> Screener
           </button>
+          <button className={tabClass('ideasLong')} onClick={() => onViewChange('ideasLong')}>
+            <Rocket className="h-4 w-4" /> Idea Generator (Long)
+          </button>
           <button className={tabClass('ideas')} onClick={() => onViewChange('ideas')}>
-            <Sparkles className="h-4 w-4" /> Idea Generator
+            <Sparkles className="h-4 w-4" /> Idea Generator (Short)
+          </button>
+          <button className={tabClass('paper')} onClick={() => onViewChange('paper')}>
+            <FlaskConical className="h-4 w-4" /> Paper Trades
           </button>
           <button className={tabClass('macro')} onClick={() => onViewChange('macro')}>
             <Gauge className="h-4 w-4" /> Options Macro Analysis

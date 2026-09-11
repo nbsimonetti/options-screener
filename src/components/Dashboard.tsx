@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { OptionPosition, ScoringWeights, APIConfig, AppView, InvestmentIdea } from '../types';
-import { DEFAULT_WEIGHTS, DEFAULT_API_CONFIG, LS_API_CONFIG, LS_IDEAS } from '../types';
+import type { OptionPosition, ScoringWeights, APIConfig, AppView, InvestmentIdea, LongIdea } from '../types';
+import { DEFAULT_WEIGHTS, DEFAULT_API_CONFIG, LS_API_CONFIG, LS_IDEAS, LS_LONG_IDEAS } from '../types';
 import Header from './Header';
 import TickerLookup from './TickerLookup';
 import PositionEntry from './PositionEntry';
@@ -11,6 +11,8 @@ import PositionTable from './PositionTable';
 import PayoffDiagram from './PayoffDiagram';
 import ScoreBreakdown from './ScoreBreakdown';
 import IdeaGenerator from './IdeaGenerator';
+import LongIdeaGenerator from './LongIdeaGenerator';
+import PaperTrades from './PaperTrades';
 import MacroAnalysis from './MacroAnalysis';
 
 const LS_POSITIONS = 'options-screener-positions';
@@ -138,6 +140,9 @@ export default function Dashboard() {
   const [ideas, setIdeas] = useState<InvestmentIdea[]>(() =>
     loadFromStorage(LS_IDEAS, [])
   );
+  const [longIdeas, setLongIdeas] = useState<LongIdea[]>(() =>
+    loadFromStorage(LS_LONG_IDEAS, [])
+  );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(positions.map(p => p.id)));
 
   useEffect(() => {
@@ -155,6 +160,10 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem(LS_IDEAS, JSON.stringify(ideas));
   }, [ideas]);
+
+  useEffect(() => {
+    localStorage.setItem(LS_LONG_IDEAS, JSON.stringify(longIdeas));
+  }, [longIdeas]);
 
   const addPosition = useCallback((pos: OptionPosition) => {
     setPositions((prev) => [...prev, pos]);
@@ -232,6 +241,21 @@ export default function Dashboard() {
               <WeightSliders weights={weights} onChange={setWeights} />
             </div>
           </div>
+        ) : activeView === 'ideasLong' ? (
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="min-w-0">
+              <LongIdeaGenerator
+                apiConfig={apiConfig}
+                ideas={longIdeas}
+                onIdeasChange={setLongIdeas}
+              />
+            </div>
+            <div className="space-y-4">
+              <DataSourceConfig config={apiConfig} onChange={setApiConfig} />
+            </div>
+          </div>
+        ) : activeView === 'paper' ? (
+          <PaperTrades apiConfig={apiConfig} longIdeas={longIdeas} shortIdeas={ideas} />
         ) : (
           <MacroAnalysis />
         )}
