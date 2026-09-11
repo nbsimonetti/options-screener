@@ -281,7 +281,7 @@ function IdeaRow({ idea, expanded, onToggle, onDismiss }: { idea: LongIdea; expa
                   <li><span className="text-slate-500">Target (R9):</span> 2× debit — sell half if ≥ 2 contracts, then 2-ATR trail</li>
                   <li><span className="text-slate-500">Time stop (R11):</span> force-close at 21 DTE</li>
                   <li><span className="text-slate-500">Stale sweep (R13):</span> close after 40 sessions if never +20%</li>
-                  <li><span className="text-slate-500">Sizing (R14):</span> 1.5% of paper equity, whole contracts, skip if 0</li>
+                  <li><span className="text-slate-500">Sizing (R14):</span> 10% of paper equity, whole contracts, skip if 0</li>
                 </ul>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded bg-slate-800/70 p-2"><div className="text-[10px] text-slate-500 uppercase">Vol context</div>HV20 {idea.hv20.toFixed(0)}% · HV60 {idea.hv60.toFixed(0)}% · IV {idea.contract.iv.toFixed(0)}%</div>

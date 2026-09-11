@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { FlaskConical, Play, Loader2, RotateCcw, Info, ScrollText, TrendingUp, TrendingDown } from 'lucide-react';
 import type { APIConfig, InvestmentIdea, LongIdea, PaperPortfolio } from '../types';
 import { PAPER_STARTING_CAPITAL } from '../types';
-import { loadPortfolio, freshPortfolio, savePortfolio, runTradingCycle, equityOf, collateralOutstanding, openLongDebits } from '../services/paperEngine';
+import { loadPortfolio, freshPortfolio, savePortfolio, runTradingCycle, equityOf, collateralOutstanding, openLongDebits, RISK_PCT, AGG_PREMIUM_PCT } from '../services/paperEngine';
 import { computeMetrics, tradeRMultiple } from '../services/paperMetrics';
 import { formatCurrency } from '../utils/formatting';
 import Sparkline from './Sparkline';
@@ -97,7 +97,7 @@ export default function PaperTrades({ apiConfig, longIdeas, shortIdeas }: Props)
           <div className="rounded bg-slate-900/60 border border-slate-700 p-3">
             <div className="text-[10px] text-slate-500 uppercase tracking-wider">Open Premium at Risk</div>
             <div className="text-sm font-mono text-slate-200 mt-1">{formatCurrency(openLongDebits(portfolio))}</div>
-            <div className="text-[10px] text-slate-500">cap 10% of equity (R15)</div>
+            <div className="text-[10px] text-slate-500">cap {(AGG_PREMIUM_PCT * 100).toFixed(0)}% of equity (R15)</div>
           </div>
           <div className="rounded bg-slate-900/60 border border-slate-700 p-3">
             <div className="text-[10px] text-slate-500 uppercase tracking-wider">Positions</div>
@@ -121,7 +121,7 @@ export default function PaperTrades({ apiConfig, longIdeas, shortIdeas }: Props)
           <Info className="h-3.5 w-3.5 text-slate-500 shrink-0 mt-0.5" />
           <p className="text-[10px] text-slate-500">
             Simulation only — fills at MID ((bid+ask)/2), never on missing or crossed quotes; mid fills are optimistic, so the spread paid-vs-mid is recorded on every entry as a slippage caveat.
-            The agent trades mechanically: long entries need a trade-tier idea with a fresh trigger; exits run R8–R13 (longs) and 50%-credit / 21-DTE / 2×-credit (CSPs) before any entry. Sizing is 1.5% of equity per trade, optimizing risk-adjusted return, not raw P&L.
+            The agent trades mechanically: long entries need a trade-tier idea with a fresh trigger; exits run R8–R13 (longs) and 50%-credit / 21-DTE / 2×-credit (CSPs) before any entry. Sizing is {(RISK_PCT * 100).toFixed(0)}% of equity per trade, optimizing risk-adjusted return, not raw P&L.
           </p>
         </div>
       </div>

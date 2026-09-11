@@ -2,8 +2,8 @@
 // Rule set: docs/LONG_STRATEGY_DESIGN.md §3–4 (long rules R8–R19; short-book
 // management: 50%-of-credit profit target, 21-DTE, 2×-credit loss backstop).
 // Every action is journaled with the rule that triggered it. Objective is
-// risk-adjusted return: sizing is fixed-fractional 1.5% risk, portfolio caps
-// bound aggregate premium, net delta, and concentration.
+// risk-adjusted return: sizing is fixed-fractional risk per trade, portfolio
+// caps bound aggregate premium, net delta, and concentration.
 
 import type {
   PaperPortfolio, PaperPosition, PaperClosedTrade, PaperJournalEntry,
@@ -14,6 +14,15 @@ import { getOptionQuote, getQuote, setCreditCategory, getCreditCount } from './m
 import { allocateBudget } from './creditLedger';
 import { canonicalUnderlying, getSectorInfo } from './sectors';
 import { marksTooStale } from './paperMetrics';
+
+// --- Sizing parameters ---
+// Per-position risk budget (risk = full debit for longs, 2σ stress for CSPs).
+// Raised from the research default of 1.5% to 10% at the user's request —
+// note a 10-loss streak at full size now costs ~65% of the book vs ~14%.
+export const RISK_PCT = 0.10;
+// Aggregate open long premium (R15). Was 10% when positions were 1.5% each;
+// scaled to 40% so the 8-position book (R16) stays reachable at larger sizes.
+export const AGG_PREMIUM_PCT = 0.40;
 
 // --- Persistence ---
 
@@ -281,17 +290,17 @@ export async function runTradingCycle(
         continue;
       }
 
-      // R14 sizing: 1.5% of current equity, whole contracts, never round up.
-      const riskBudget = 0.015 * equity;
+      // R14 sizing: RISK_PCT of current equity, whole contracts, never round up.
+      const riskBudget = RISK_PCT * equity;
       const contracts = Math.floor(riskBudget / (mid * 100));
       if (contracts === 0) {
-        log({ action: 'SKIP', ticker: idea.ticker, rule: 'R14', detail: `1 contract ($${(mid * 100).toFixed(0)}) exceeds the ${(0.015 * 100).toFixed(1)}% risk budget ($${riskBudget.toFixed(0)}) — skipped, never rounded up.` });
+        log({ action: 'SKIP', ticker: idea.ticker, rule: 'R14', detail: `1 contract ($${(mid * 100).toFixed(0)}) exceeds the ${(RISK_PCT * 100).toFixed(0)}% risk budget ($${riskBudget.toFixed(0)}) — skipped, never rounded up.` });
         continue;
       }
       const debit = mid * 100 * contracts;
 
-      if (openLongDebits(p) + debit > 0.10 * equity) {
-        log({ action: 'VETO', ticker: idea.ticker, rule: 'R15', detail: `Aggregate open premium would exceed 10% of equity.` });
+      if (openLongDebits(p) + debit > AGG_PREMIUM_PCT * equity) {
+        log({ action: 'VETO', ticker: idea.ticker, rule: 'R15', detail: `Aggregate open premium would exceed ${(AGG_PREMIUM_PCT * 100).toFixed(0)}% of equity.` });
         continue;
       }
       const underlying = oq.underlyingPrice > 0 ? oq.underlyingPrice : idea.currentPrice;
@@ -368,8 +377,8 @@ export async function runTradingCycle(
           const stress = Math.max(0, (cand.position.strikePrice - (S - 2 * sd1)) * 100 - mid * 100);
           const collateral = cand.position.strikePrice * 100;
           const freeCash = p.cash - collateralOutstanding(p);
-          if (stress > 0.02 * equity) {
-            log({ action: 'SKIP', ticker: cand.position.ticker, rule: 'S-size', detail: `CSP 2σ stress loss $${stress.toFixed(0)} exceeds 2% of equity ($${(0.02 * equity).toFixed(0)}) — risk ≠ premium.` });
+          if (stress > RISK_PCT * equity) {
+            log({ action: 'SKIP', ticker: cand.position.ticker, rule: 'S-size', detail: `CSP 2σ stress loss $${stress.toFixed(0)} exceeds ${(RISK_PCT * 100).toFixed(0)}% of equity ($${(RISK_PCT * equity).toFixed(0)}) — risk ≠ premium.` });
           } else if (collateral > Math.min(0.4 * equity, freeCash)) {
             log({ action: 'SKIP', ticker: cand.position.ticker, rule: 'S-size', detail: `CSP collateral $${collateral.toFixed(0)} exceeds 40% of equity or free cash.` });
           } else {
