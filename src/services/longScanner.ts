@@ -1,0 +1,311 @@
+// Long call / long put idea scanner — the directional mirror of scanner.ts.
+// Pipeline per docs/LONG_STRATEGY_DESIGN.md:
+//   Yahoo history (free) → factor composites → only factor-qualified tickers
+//   spend MarketData credits (quote + expirations + ONE chain side) → funnel
+//   stages 1–6 → contract selection → LongIdea.
+
+import type { LongIdea, LongContract, ScanProgress, FactorScore } from '../types';
+import {
+  getQuote, getExpirations, getOptionChain,
+  resetRequestCount, getCreditCount, BudgetExceededError, enforceBudget, setCreditCategory,
+} from './marketdata';
+import type { MDOption } from './marketdata';
+import { fetchHistory, historyAvailable, HistoryUnavailableError, type DailyBars } from './history';
+import {
+  computeBullish, computeBearish, detectEntryTrigger,
+  atr14, historicalVol, avgAbsDailyReturn, medianHistoricalMove, sma,
+} from './factors';
+import { resolveIVRank, getCachedIVData } from './ivRank';
+import { getSectorInfo } from './sectors';
+import { getRemainingCredits } from './creditLedger';
+
+export const DEFAULT_LONG_SCAN_CREDITS = 2000;
+const BULL_TRADE = 70, BULL_WATCH = 60;
+const BEAR_TRADE = 75, BEAR_WATCH = 65;
+const SCAN_DELAY_MS = 400;
+
+export interface LongScanResult {
+  ideas: LongIdea[];
+  degradedToCacheOnly: boolean;
+  creditsUsed: number;
+  skips: string[]; // human-readable skip/veto log
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function dteFromDate(iso: string): number {
+  const exp = new Date(iso + 'T16:00:00');
+  return Math.ceil((exp.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+}
+
+function pickLongExpiration(expirations: string[]): string | null {
+  const inBand = (lo: number, hi: number) =>
+    expirations
+      .map((e) => ({ e, dte: dteFromDate(e) }))
+      .filter(({ dte }) => dte >= lo && dte <= hi)
+      .sort((a, b) => Math.abs(a.dte - 90) - Math.abs(b.dte - 90))[0]?.e ?? null;
+  return inBand(60, 120) ?? inBand(45, 150);
+}
+
+interface ContractPick {
+  opt: MDOption;
+  liquidityScore: number; // 0-100
+  reject?: string;
+}
+
+/** Funnel stages 4–5: delta band 0.55–0.75 target 0.65, liquidity gates, ATM fallback. */
+function pickContract(chain: MDOption[], side: 'call' | 'put'): ContractPick | { reject: string } {
+  const usable = chain.filter((o) => o.side === side && (o.mid > 0 || (o.bid > 0 && o.ask > 0)));
+  if (usable.length === 0) return { reject: 'no chain data' };
+
+  const liquidityOf = (o: MDOption): { ok: boolean; score: number; why: string } => {
+    const mid = o.mid || (o.bid + o.ask) / 2;
+    const spread = o.ask - o.bid;
+    const spreadPct = mid > 0 ? spread / mid : 1;
+    if ((o.bid || 0) < 0.05) return { ok: false, score: 0, why: 'no real bid' };
+    const absCap = mid < 5 ? 0.30 : 0.50;
+    if (spread > absCap) return { ok: false, score: 0, why: `spread $${spread.toFixed(2)} > cap` };
+    if (spreadPct > 0.15) return { ok: false, score: 0, why: `spread ${(spreadPct * 100).toFixed(0)}% of mid` };
+    if (spreadPct > 0.10 && !(spread <= 0.10 || o.openInterest >= 1000)) {
+      return { ok: false, score: 0, why: `spread ${(spreadPct * 100).toFixed(0)}% without depth` };
+    }
+    if ((o.openInterest || 0) < 100) return { ok: false, score: 0, why: `OI ${o.openInterest}` };
+    // Score: spread tier 60%, OI 40%
+    const spreadScore = spreadPct <= 0.05 ? 100 : spreadPct <= 0.10 ? 70 : 40;
+    const oiScore = o.openInterest >= 1000 ? 100 : o.openInterest >= 250 ? 70 : 40;
+    return { ok: true, score: 0.6 * spreadScore + 0.4 * oiScore, why: '' };
+  };
+
+  const band = usable
+    .filter((o) => Math.abs(o.delta) >= 0.55 && Math.abs(o.delta) <= 0.75)
+    .map((o) => ({ o, liq: liquidityOf(o) }))
+    .filter((x) => x.liq.ok)
+    .sort((a, b) =>
+      Math.abs(Math.abs(a.o.delta) - 0.65) - Math.abs(Math.abs(b.o.delta) - 0.65)
+      || (a.o.ask - a.o.bid) - (b.o.ask - b.o.bid)
+      || b.o.openInterest - a.o.openInterest);
+  if (band[0]) return { opt: band[0].o, liquidityScore: band[0].liq.score };
+
+  // ATM 0.50Δ fallback
+  const atm = usable
+    .map((o) => ({ o, liq: liquidityOf(o) }))
+    .filter((x) => x.liq.ok)
+    .sort((a, b) => Math.abs(Math.abs(a.o.delta) - 0.50) - Math.abs(Math.abs(b.o.delta) - 0.50))[0];
+  if (atm && Math.abs(Math.abs(atm.o.delta) - 0.50) <= 0.08) {
+    return { opt: atm.o, liquidityScore: atm.liq.score * 0.8 };
+  }
+  return { reject: 'no liquid contract in delta band (0.55–0.75) or at ATM' };
+}
+
+export async function scanForLongIdeas(
+  universe: string[],
+  onProgress: (p: ScanProgress) => void,
+  marketDataToken?: string,
+  creditBudget?: number,
+): Promise<LongScanResult> {
+  if (!historyAvailable()) {
+    throw new HistoryUnavailableError(
+      'The Long scanner needs underlying price history (Yahoo via the dev-server proxy). Run the app with the local dev server.',
+    );
+  }
+
+  resetRequestCount();
+  setCreditCategory('longScan');
+  const scanCredits = Math.max(0, Math.min(creditBudget ?? DEFAULT_LONG_SCAN_CREDITS, getRemainingCredits()));
+  let cacheOnly = scanCredits === 0;
+  const ideas: LongIdea[] = [];
+  const skips: string[] = [];
+  const total = universe.length;
+  const now = new Date().toISOString();
+
+  const emit = (partial: Partial<ScanProgress>) => {
+    onProgress({
+      phase: 'fetching', current: 0, total, currentTicker: '', message: '',
+      requestsUsed: getCreditCount(), requestBudget: scanCredits, ...partial,
+    });
+  };
+
+  emit({ message: 'Fetching benchmark history (SPY + sectors)...' });
+  const spy = await fetchHistory('SPY').catch(() => null);
+  const sectorBars = new Map<string, DailyBars | null>();
+
+  for (let i = 0; i < universe.length; i++) {
+    const ticker = universe[i];
+    emit({ current: i + 1, currentTicker: ticker, message: `Analyzing ${ticker} (${i + 1}/${total})` });
+
+    try {
+      // --- Factor stage (free: Yahoo history only) ---
+      const bars = await fetchHistory(ticker).catch(() => null);
+      if (!bars || bars.closes.length < 260) { skips.push(`${ticker}: insufficient history`); continue; }
+      const close = bars.closes[bars.closes.length - 1];
+
+      // Stage 0 underlying floor
+      const advDollar = sma(bars.closes.map((c, j) => c * bars.volumes[j]), 20);
+      const hv20 = historicalVol(bars.closes, 20);
+      const hv30 = historicalVol(bars.closes, 30);
+      const hv60 = historicalVol(bars.closes, 60);
+      if (close < 20) { skips.push(`${ticker}: price $${close.toFixed(0)} < $20`); continue; }
+      if (advDollar < 25e6) { skips.push(`${ticker}: dollar volume < $25M`); continue; }
+      if (hv20 < 15) { skips.push(`${ticker}: HV20 ${hv20.toFixed(0)}% < 15% (dead stock)`); continue; }
+
+      const info = getSectorInfo(ticker);
+      if (!sectorBars.has(info.etf)) {
+        sectorBars.set(info.etf, await fetchHistory(info.etf).catch(() => null));
+      }
+      const sector = sectorBars.get(info.etf) ?? null;
+
+      const cachedIV = getCachedIVData(ticker);
+      const provisionalIVR = cachedIV?.ivRank ?? 50;
+
+      const ctx = { bars, spy, sector, ivRank: provisionalIVR };
+      const bull = computeBullish(ctx);
+      const bear = computeBearish(ctx);
+
+      let direction: 'bull' | 'bear' | null = null;
+      if (bull.score >= BULL_WATCH && bull.score >= bear.score && !bull.gated) direction = 'bull';
+      else if (bear.score >= BEAR_WATCH && !bear.gated) direction = 'bear';
+      if (!direction) continue;
+
+      const result = direction === 'bull' ? bull : bear;
+      const side: 'call' | 'put' = direction === 'bull' ? 'call' : 'put';
+      const watchFloor = direction === 'bull' ? BULL_WATCH : BEAR_WATCH;
+      const tradeFloor = direction === 'bull' ? BULL_TRADE : BEAR_TRADE;
+
+      // Dead-stock disambiguation (stage 1c)
+      const aliveA = avgAbsDailyReturn(bars.closes, 20) >= 0.8;
+      const aliveB = hv20 >= 0.75 * hv60;
+      if (!aliveA || !aliveB) { skips.push(`${ticker}: failed alive checks (avg |ret| or HV trend)`); continue; }
+
+      // --- Options stage (credits) ---
+      if (cacheOnly) { skips.push(`${ticker}: credit budget exhausted (factor score ${result.score.toFixed(0)})`); continue; }
+      try {
+        enforceBudget(scanCredits);
+      } catch (e) {
+        if (e instanceof BudgetExceededError) { cacheOnly = true; skips.push(`${ticker}: credit budget exhausted`); continue; }
+        throw e;
+      }
+
+      const quote = await getQuote(ticker, marketDataToken);
+      const price = quote.last || quote.mid || close;
+      const expirations = await getExpirations(ticker, marketDataToken);
+      const expiration = pickLongExpiration(expirations);
+      if (!expiration) { skips.push(`${ticker}: no expiration in 45–150 DTE`); continue; }
+
+      const chain = await getOptionChain(ticker, marketDataToken, { expiration, side, strikeLimit: 12 });
+      if (chain.length === 0) { skips.push(`${ticker}: empty chain`); continue; }
+
+      // Resolve IV rank from the fetched chain (records today's sample)
+      const ivData = resolveIVRank(ticker, chain, price);
+      const ivRank = ivData.ivRank;
+      const ivRankSource = ivData.source ?? 'smile';
+
+      // Re-apply IVR gates with the real number (funnel stage 1a)
+      const hardGate = direction === 'bull' ? 65 : 55;
+      if (ivRank > 50) { skips.push(`${ticker}: IVR ${ivRank.toFixed(0)} > 50 (long premium too expensive)`); continue; }
+      if (ivRank > hardGate) { skips.push(`${ticker}: IVR gate`); continue; }
+
+      const pick = pickContract(chain, side);
+      if ('reject' in pick && pick.reject) { skips.push(`${ticker}: ${pick.reject}`); continue; }
+      const { opt, liquidityScore } = pick as ContractPick;
+
+      const mid = opt.mid || (opt.bid + opt.ask) / 2;
+      const ivPct = (opt.iv || 0) * 100;
+
+      // Stage 1b: IV vs realized
+      const ivHvRatio = ivPct / Math.max(hv20, hv30, 1);
+      if (ivHvRatio > 1.25) { skips.push(`${ticker}: IV/HV ${ivHvRatio.toFixed(2)} > 1.25`); continue; }
+      if (ivHvRatio > 1.10 && ivRank > 20) { skips.push(`${ticker}: IV/HV ${ivHvRatio.toFixed(2)} with IVR ${ivRank.toFixed(0)}`); continue; }
+
+      // Stage 3: expected vs historical move over the holding horizon
+      const horizon = Math.min(opt.dte, 90);
+      const tradingDays = Math.round(horizon * 252 / 365);
+      const impliedEM = price * (ivPct / 100) * Math.sqrt(horizon / 365);
+      const hist = medianHistoricalMove(bars.closes, Math.max(10, tradingDays));
+      const emRatio = Number.isFinite(hist.median) && hist.median > 0 ? (impliedEM / price) / hist.median : 1;
+      if (emRatio > 1.20) { skips.push(`${ticker}: implied move ${emRatio.toFixed(2)}× historical median`); continue; }
+      if (Number.isFinite(hist.p75) && impliedEM / price > hist.p75) { skips.push(`${ticker}: implied move above p75 historical`); continue; }
+
+      const intrinsic = side === 'call' ? Math.max(0, price - opt.strike) : Math.max(0, opt.strike - price);
+      const extrinsicPct = mid > 0 ? Math.max(0, mid - intrinsic) / mid : 1;
+      if (extrinsicPct > 0.40 && Math.abs(opt.delta) >= 0.55) {
+        skips.push(`${ticker}: extrinsic ${(extrinsicPct * 100).toFixed(0)}% at ${Math.abs(opt.delta).toFixed(2)}Δ — IV fatter than deltas imply`);
+        continue;
+      }
+
+      // Entry trigger + stop context (rules R3/R4/R6/R7 + R10)
+      const trig = detectEntryTrigger(bars, direction);
+      const atr = atr14(bars);
+      const sigRef = trig?.sigRef ?? sma(bars.closes, 20);
+      const stopLevel = direction === 'bull'
+        ? Math.min(sigRef, price) - 1.0 * atr
+        : Math.max(sigRef, price) + 1.0 * atr;
+
+      // Flags (stage 6 — warn, don't reject)
+      const flags: string[] = [];
+      if (ivRank > 30) flags.push(`IVR ${ivRank.toFixed(0)} > 30 — a debit spread would cut vega/theta cost`);
+      if (emRatio > 1.0) flags.push('Implied move exceeds the historical median for this horizon');
+      if (extrinsicPct > 0.60) flags.push(`Extrinsic is ${(extrinsicPct * 100).toFixed(0)}% of premium — heavy theta bill`);
+      if (ivRankSource === 'smile') flags.push('IVR is a smile-shape estimate until 20 daily samples accrue');
+
+      // Blended display score
+      const volScore = 0.6 * Math.max(0, 100 - 1.5 * ivRank) + 0.4 * Math.max(0, Math.min(100, ((1.25 - ivHvRatio) / 0.5) * 100));
+      const emScore = Math.max(0, Math.min(100, ((1.2 - emRatio) / 0.6) * 100));
+      const overallScore = 0.6 * result.score + 0.2 * volScore + 0.1 * liquidityScore + 0.1 * emScore;
+
+      const contract: LongContract = {
+        optionSymbol: opt.optionSymbol,
+        side,
+        strike: opt.strike,
+        expirationDate: new Date(opt.expiration * 1000).toISOString().split('T')[0],
+        dte: opt.dte,
+        bid: opt.bid || 0,
+        ask: opt.ask || 0,
+        mid: +mid.toFixed(2),
+        delta: opt.delta || 0,
+        iv: ivPct,
+        theta: opt.theta || 0,
+        vega: opt.vega || 0,
+        volume: opt.volume || 0,
+        openInterest: opt.openInterest || 0,
+        extrinsicPct,
+      };
+
+      const factors: FactorScore[] = result.factors;
+      ideas.push({
+        id: crypto.randomUUID(),
+        ticker,
+        direction: side === 'call' ? 'LC' : 'LP',
+        currentPrice: price,
+        compositeScore: result.score,
+        overallScore,
+        factors,
+        contract,
+        ivRank,
+        ivRankSource,
+        hv20,
+        hv60,
+        ivHvRatio,
+        emRatio,
+        entryTrigger: trig?.trigger ?? null,
+        triggerDate: trig?.triggerDate ?? null,
+        sigRef,
+        atr,
+        stopLevel,
+        flags,
+        tier: result.score >= tradeFloor && trig ? 'trade' : result.score >= watchFloor ? 'watchlist' : 'watchlist',
+        generatedAt: now,
+      });
+    } catch (e) {
+      if (e instanceof BudgetExceededError) { cacheOnly = true; continue; }
+      skips.push(`${ticker}: ${e instanceof Error ? e.message.substring(0, 80) : 'failed'}`);
+    }
+
+    if (i < universe.length - 1) await delay(SCAN_DELAY_MS);
+  }
+
+  ideas.sort((a, b) => b.overallScore - a.overallScore);
+  console.debug('[longScanner]', { ideas: ideas.length, creditsUsed: getCreditCount(), cacheOnly, skips });
+  return { ideas, degradedToCacheOnly: cacheOnly, creditsUsed: getCreditCount(), skips };
+}

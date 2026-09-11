@@ -449,7 +449,7 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4">
         <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-amber-400" /> AI Idea Generator
+            <Sparkles className="h-4 w-4 text-amber-400" /> AI Idea Generator (Short)
           </h2>
 
           <button
