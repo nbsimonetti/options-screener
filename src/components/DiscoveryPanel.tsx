@@ -179,7 +179,10 @@ function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, o
     <>
       <tr className="border-b border-slate-700/50 cursor-pointer hover:bg-slate-700/20 transition-colors" onClick={onToggle}>
         <td className="px-3 py-1.5 text-xs text-slate-500 font-mono">#{rank}</td>
-        <td className="px-2 py-1.5 font-semibold text-white">{row.t}</td>
+        <td className="px-2 py-1.5">
+          <span className="font-semibold text-white">{row.t}</span>
+          {row.n && <div className="text-[10px] text-slate-500 max-w-[180px] truncate" title={row.n}>{row.n}</div>}
+        </td>
         <td className="px-2 py-1.5 text-center">
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${row.cap === 'SC' ? 'bg-cyan-900/50 text-cyan-300' : 'bg-slate-700 text-slate-300'}`}>{row.cap}</span>
         </td>
@@ -204,6 +207,12 @@ function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, o
       {isExpanded && (
         <tr className="border-b border-slate-700/50">
           <td colSpan={10} className="px-4 py-2 bg-slate-900/50">
+            {(row.n || row.d) && (
+              <div className="mb-1.5 text-xs text-slate-300">
+                <span className="font-semibold text-white">{row.n || row.t}</span>
+                {row.d && <span className="text-slate-400"> — {row.d}</span>}
+              </div>
+            )}
             <div className="flex flex-wrap gap-3">
               {factors.map(([key, s]) => (
                 <span key={key} className="text-[10px] text-slate-400">

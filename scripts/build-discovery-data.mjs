@@ -73,12 +73,13 @@ async function loadSP500() {
   const lines = csv.split(/\r?\n/).filter(Boolean);
   const header = parseCsvLine(lines[0]).map((h) => h.toLowerCase());
   const symIdx = header.findIndex((h) => h === 'symbol');
+  const nameIdx = header.findIndex((h) => h === 'security');
   const secIdx = header.findIndex((h) => h.includes('sector'));
   const out = new Map();
   for (const line of lines.slice(1)) {
     const cols = parseCsvLine(line);
     const sym = normalizeTicker(cols[symIdx] ?? '');
-    if (sym) out.set(sym, { sector: cols[secIdx] || 'Unknown', cap: 'LC' });
+    if (sym) out.set(sym, { sector: cols[secIdx] || 'Unknown', cap: 'LC', name: cols[nameIdx] || '' });
   }
   if (out.size < 400) throw new Error(`S&P 500 source returned only ${out.size} rows`);
   return out;
@@ -96,11 +97,16 @@ async function loadNasdaq100() {
   // Table rows look like: |-\n| ADBE\n|| [[Adobe Inc.]] || Technology || ...
   // or single-line "| ADBE || [[Adobe Inc.]] || ...". Take the first cell of
   // each row when it looks like a ticker.
-  const out = new Set();
+  const out = new Map();
   for (const row of wikitext.split(/\n\|-/)) {
-    const firstCell = row.split(/\|\|/)[0] ?? '';
+    const cells = row.split(/\|\|/);
+    const firstCell = cells[0] ?? '';
     const m = firstCell.match(/\|\s*([A-Z]{1,5}(?:\.[A-Z])?)\s*$/m);
-    if (m) out.add(normalizeTicker(m[1]));
+    if (!m) continue;
+    // Second cell holds the company as a wikilink: [[Adobe Inc.]] or [[Page|Display]]
+    const nameCell = cells[1] ?? '';
+    const nm = nameCell.match(/\[\[(?:[^\]|]*\|)?([^\]|]+)\]\]/);
+    out.set(normalizeTicker(m[1]), nm ? nm[1].trim() : '');
   }
   if (out.size < 80) throw new Error(`Nasdaq-100 parse found only ${out.size} tickers`);
   return out;
@@ -118,6 +124,7 @@ async function loadRussell2000() {
   if (headerIdx < 0) throw new Error('IWM holdings: header row not found');
   const header = parseCsvLine(lines[headerIdx]).map((h) => h.toLowerCase());
   const symIdx = 0;
+  const nameIdx = header.findIndex((h) => h === 'name');
   const secIdx = header.findIndex((h) => h === 'sector');
   const assetIdx = header.findIndex((h) => h.includes('asset class'));
   const priceIdx = header.findIndex((h) => h === 'price');
@@ -136,7 +143,7 @@ async function loadRussell2000() {
     // floor anyway, so skip their Yahoo fetch entirely (~40% of the index).
     const csvPrice = priceIdx >= 0 ? Number((cols[priceIdx] || '0').replace(/[",]/g, '')) : 0;
     if (!(csvPrice >= 10)) continue;
-    out.set(sym, { sector: cols[secIdx] || 'Unknown', cap: 'SC' });
+    out.set(sym, { sector: cols[secIdx] || 'Unknown', cap: 'SC', name: cols[nameIdx] || '' });
   }
   // Validate on the RAW equity count (pre price-filter) so a truncated or
   // malformed payload fails loudly even though the filtered set is smaller.
@@ -191,7 +198,7 @@ console.log(`S&P 500: ${sp500.size} · Nasdaq-100: ${ndx.size} · IWM equities: 
 
 // Merge: LC = S&P 500 ∪ NDX (NDX-only names get sector Unknown), SC = R2K.
 const pool = new Map(sp500);
-for (const t of ndx) if (!pool.has(t)) pool.set(t, { sector: 'Unknown', cap: 'LC' });
+for (const [t, name] of ndx) if (!pool.has(t)) pool.set(t, { sector: 'Unknown', cap: 'LC', name });
 for (const [t, info] of r2k) if (!pool.has(t)) pool.set(t, info);
 
 // Liquidity floors (design doc §2): LC price ≥ $20 & ADDV ≥ $25M;
@@ -272,6 +279,7 @@ for (const ticker of tickers) {
 
     scored.push({
       t: ticker,
+      n: info.name || '',
       cap: info.cap,
       sec: info.sector,
       p: r2(price),
@@ -351,7 +359,32 @@ for (const t of new Set([...topLong, ...topShort])) {
   };
 }
 
+// Shortlist enrichment: company/industry descriptor from Yahoo's search
+// endpoint (the only profile-ish endpoint left outside the crumb wall —
+// quoteSummary returns 401 Invalid Crumb without a session). ~40 requests.
+for (const t of new Set([...topLong, ...topShort])) {
+  const row = scored.find((r) => r.t === t);
+  if (!row) continue;
+  try {
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(t)}&quotesCount=3&newsCount=0`,
+      { headers: { 'User-Agent': UA } },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const q = (data.quotes ?? []).find((x) => x.symbol === t && x.quoteType === 'EQUITY');
+      if (q) {
+        if (q.longname || q.shortname) row.n = q.longname || q.shortname; // nicer casing than the holdings CSV
+        const bits = [q.industry, q.exchDisp].filter(Boolean);
+        if (bits.length) row.d = bits.join(' · ');
+      }
+    }
+  } catch { /* descriptor is best-effort */ }
+  await sleep(150);
+}
+
 const artifact = {
+  version: 2, // bump forces refresh-discovery.mjs to regenerate instead of reusing
   fetchedAt: new Date().toISOString(),
   stats: {
     poolSize: tickers.length,

@@ -12,6 +12,8 @@ import type { DailyBars } from './history';
 
 export interface DiscoveryRow {
   t: string;             // ticker
+  n?: string;            // company name (constituent files, Yahoo-cased for shortlist members)
+  d?: string;            // brief descriptor "Industry · Exchange" (shortlist members only)
   cap: 'LC' | 'SC';
   sec: string;           // sector (from constituent source)
   p: number;             // price at snapshot

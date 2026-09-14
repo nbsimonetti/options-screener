@@ -11,6 +11,9 @@ import { spawnSync } from 'node:child_process';
 
 const LIVE_URL = 'https://nbsimonetti.github.io/options-screener/discovery-data.json';
 const MAX_AGE_H = 20;
+// Must match the version written by build-discovery-data.mjs — a mismatch
+// (schema change) forces regeneration instead of reusing a stale shape.
+const EXPECTED_VERSION = 2;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outPath = join(here, '..', 'public', 'discovery-data.json');
@@ -22,6 +25,10 @@ async function tryReuse() {
     const text = await res.text();
     const data = JSON.parse(text);
     if (!data.fetchedAt || !Array.isArray(data.scored)) return null;
+    if (data.version !== EXPECTED_VERSION) {
+      console.log(`Published artifact is schema v${data.version ?? 1} (need v${EXPECTED_VERSION}) — regenerating.`);
+      return null;
+    }
     const ageH = (Date.now() - new Date(data.fetchedAt).getTime()) / 3600000;
     if (ageH > MAX_AGE_H) {
       console.log(`Published artifact is ${ageH.toFixed(1)}h old (> ${MAX_AGE_H}h) — regenerating.`);

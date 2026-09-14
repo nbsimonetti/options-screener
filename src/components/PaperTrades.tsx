@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { FlaskConical, Play, Loader2, RotateCcw, Info, ScrollText, TrendingUp, TrendingDown } from 'lucide-react';
 import type { APIConfig, InvestmentIdea, LongIdea, PaperPortfolio } from '../types';
 import { PAPER_STARTING_CAPITAL } from '../types';
@@ -30,19 +30,34 @@ export default function PaperTrades({ apiConfig, longIdeas, shortIdeas }: Props)
   const pnl = equity - PAPER_STARTING_CAPITAL;
   const metrics = useMemo(() => computeMetrics(portfolio, PAPER_STARTING_CAPITAL), [portfolio]);
 
-  const runCycle = useCallback(async () => {
+  const runCycle = useCallback(async (auto = false) => {
     setRunning(true);
     setError('');
     try {
       const result = await runTradingCycle(portfolio, longIdeas, shortIdeas, apiConfig.marketDataToken || undefined);
       setPortfolio(result.portfolio);
-      setLastSummary(result.summary);
+      setLastSummary((auto ? 'Auto-cycle (last run > 20h ago) — ' : '') + result.summary);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Cycle failed');
     } finally {
       setRunning(false);
     }
   }, [portfolio, longIdeas, shortIdeas, apiConfig]);
+
+  // Auto-cycle on open: if the book has run before and the last cycle is
+  // more than 20h old, run one automatically so stops / 21-DTE management /
+  // marking never depend on remembering to click. First-ever cycle stays
+  // manual. Ref guard prevents StrictMode double-invocation.
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (autoRan.current) return;
+    autoRan.current = true;
+    const last = portfolio.lastCycleAt;
+    if (last && Date.now() - new Date(last).getTime() > 20 * 3600000) {
+      runCycle(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const resetPortfolio = () => {
     if (!window.confirm(`Reset the paper portfolio? All positions, trades, and history will be wiped and capital restored to ${formatCurrency(PAPER_STARTING_CAPITAL)}. This cannot be undone.`)) return;
@@ -64,7 +79,7 @@ export default function PaperTrades({ apiConfig, longIdeas, shortIdeas }: Props)
             <FlaskConical className="h-4 w-4 text-violet-400" /> Paper Trades
           </h2>
           <button
-            onClick={runCycle}
+            onClick={() => runCycle()}
             disabled={running}
             className="flex items-center gap-2 rounded bg-violet-600 px-5 py-2 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
@@ -122,6 +137,7 @@ export default function PaperTrades({ apiConfig, longIdeas, shortIdeas }: Props)
           <p className="text-[10px] text-slate-500">
             Simulation only — fills at MID ((bid+ask)/2), never on missing or crossed quotes; mid fills are optimistic, so the spread paid-vs-mid is recorded on every entry as a slippage caveat.
             The agent trades mechanically: long entries need a trade-tier idea with a fresh trigger; exits run R8–R13 (longs) and 50%-credit / 21-DTE / 2×-credit (CSPs) before any entry. Sizing is {(RISK_PCT * 100).toFixed(0)}% of equity per trade, optimizing risk-adjusted return, not raw P&L.
+            A cycle runs automatically when you open this tab and the last one is more than 20 hours old.
           </p>
         </div>
       </div>
