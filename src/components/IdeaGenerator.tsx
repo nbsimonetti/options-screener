@@ -11,6 +11,7 @@ import { allocateBudget } from '../services/creditLedger';
 import { loadPortfolio } from '../services/paperEngine';
 import { calcAnnualizedYield } from '../scoring/engine';
 import IdeaCard from './IdeaCard';
+import DiscoveryPanel from './DiscoveryPanel';
 
 type SortKey = 'score' | 'ticker' | 'type' | 'strike' | 'price' | 'yield' | 'delta' | 'psafe' | 'dte' | 'expiry' | 'ivr' | 'confidence';
 
@@ -525,6 +526,11 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
         {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
       </div>
+
+      <DiscoveryPanel
+        direction="short"
+        onUniverseChange={() => { setWatchlistState(getWatchlist()); setExcludedState(getExcluded()); }}
+      />
 
       {/* Settings panel */}
       {showSettings && (

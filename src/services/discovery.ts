@@ -1,0 +1,112 @@
+// Client side of the discovery feature: loads the CI-built pre-scored pool
+// (discovery-data.json — S&P 500 + Nasdaq-100 + liquid Russell 2000, scored
+// with the SAME factor engine in Node), exposes the shortlists, and handles
+// promotion into the scan universe with provenance tracking.
+//
+// Zero MarketData credits: everything here is static data. In dev without the
+// artifact, run `node scripts/build-discovery-data.mjs --limit 120` once to
+// generate a local test pool (it lands in public/, which Vite serves).
+
+import { addTicker, removeTicker } from './universe';
+import type { DailyBars } from './history';
+
+export interface DiscoveryRow {
+  t: string;             // ticker
+  cap: 'LC' | 'SC';
+  sec: string;           // sector (from constituent source)
+  p: number;             // price at snapshot
+  adv: number;           // 20d avg dollar volume, $M
+  bull: number;          // bullish composite 0-100
+  bear: number;          // bearish composite (0 = excluded by a guard)
+  bullP?: number;        // within-cap-bucket percentile
+  bearP?: number;
+  bf: [string, number][]; // bull factor [key, score] pairs (no ivq — unknown pre-options)
+  sf: [string, number][];
+  g: string[];           // small-cap put-side guards that fired
+  trig?: string;         // entry trigger (shortlist members only)
+  trigDate?: string;
+}
+
+interface CompactBars { t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[] }
+
+export interface DiscoveryData {
+  fetchedAt: string;
+  stats: { poolSize: number; scored: number; lc: number; sc: number; failures: number };
+  topLong: string[];
+  topShort: string[];
+  scored: DiscoveryRow[];
+  topBars: Record<string, CompactBars>;
+}
+
+const DISCOVERY_URL = `${import.meta.env.BASE_URL}discovery-data.json`;
+let discoveryPromise: Promise<DiscoveryData | null> | null = null;
+
+export function loadDiscoveryData(): Promise<DiscoveryData | null> {
+  if (!discoveryPromise) {
+    discoveryPromise = fetch(DISCOVERY_URL)
+      .then((res) => (res.ok ? (res.json() as Promise<DiscoveryData>) : null))
+      .catch(() => null);
+  }
+  return discoveryPromise;
+}
+
+/** Bars for a shortlist member — lets the Long scanner evaluate promoted
+ * tickers in production without the dev proxy. Sync over the cached load. */
+let loadedData: DiscoveryData | null = null;
+loadDiscoveryData().then((d) => { loadedData = d; });
+
+export function getDiscoveryBars(ticker: string): DailyBars | null {
+  const compact = loadedData?.topBars?.[ticker.toUpperCase()];
+  if (!compact) return null;
+  return {
+    ticker: ticker.toUpperCase(),
+    timestamps: compact.t,
+    opens: compact.o,
+    highs: compact.h,
+    lows: compact.l,
+    closes: compact.c,
+    volumes: compact.v,
+  };
+}
+
+// --- Promotion with provenance ---
+
+const LS_PROMOTED = 'options-screener-promoted';
+
+export interface PromotedRecord {
+  ticker: string;
+  promotedAt: string; // ISO
+  direction: 'long' | 'short';
+}
+
+export function getPromoted(): PromotedRecord[] {
+  try {
+    return JSON.parse(localStorage.getItem(LS_PROMOTED) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function savePromoted(list: PromotedRecord[]) {
+  try {
+    localStorage.setItem(LS_PROMOTED, JSON.stringify(list));
+  } catch { /* ignore */ }
+}
+
+/** Adds the ticker to the default-universe custom watchlist and records provenance. */
+export function promoteTicker(ticker: string, direction: 'long' | 'short') {
+  addTicker(ticker);
+  const list = getPromoted().filter((r) => r.ticker !== ticker.toUpperCase());
+  list.push({ ticker: ticker.toUpperCase(), promotedAt: new Date().toISOString(), direction });
+  savePromoted(list);
+}
+
+export function demoteTicker(ticker: string) {
+  removeTicker(ticker);
+  savePromoted(getPromoted().filter((r) => r.ticker !== ticker.toUpperCase()));
+}
+
+export function demoteAll() {
+  for (const r of getPromoted()) removeTicker(r.ticker);
+  savePromoted([]);
+}

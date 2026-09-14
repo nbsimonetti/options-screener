@@ -118,8 +118,19 @@ export async function fetchHistory(ticker: string): Promise<DailyBars> {
     }
     const compact = snap.bars[upper];
     if (!compact) {
+      // Promoted discovery tickers: the discovery artifact carries compact
+      // bars for its shortlist members — use them so promotion works on the
+      // static build without the dev proxy.
+      const { getDiscoveryBars } = await import('./discovery');
+      const disc = getDiscoveryBars(upper);
+      if (disc) {
+        const cache2 = readCache();
+        cache2[upper] = { value: disc, timestamp: Date.now() };
+        writeCache(cache2);
+        return disc;
+      }
       throw new HistoryUnavailableError(
-        `${upper} is not in the static history snapshot (default universe + sector ETFs only) — scan custom tickers via the local dev server.`,
+        `${upper} is not in the static history snapshot (default universe + sector ETFs + current discovery shortlist) — scan other custom tickers via the local dev server.`,
       );
     }
     const bars: DailyBars = {

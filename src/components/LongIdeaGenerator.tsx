@@ -8,6 +8,7 @@ import { allocateBudget } from '../services/creditLedger';
 import { loadPortfolio } from '../services/paperEngine';
 import { getCreditCount } from '../services/marketdata';
 import { formatCurrency } from '../utils/formatting';
+import DiscoveryPanel from './DiscoveryPanel';
 
 interface Props {
   apiConfig: APIConfig;
@@ -35,7 +36,9 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
   const [showSkips, setShowSkips] = useState(false);
   const [skips, setSkips] = useState<string[]>([]);
 
-  const universe = getUniverse();
+  const [universeTick, setUniverseTick] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const universe = useMemo(() => getUniverse(), [universeTick]);
 
   const runScan = useCallback(async () => {
     setError('');
@@ -135,6 +138,8 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
           </div>
         )}
       </div>
+
+      <DiscoveryPanel direction="long" onUniverseChange={() => setUniverseTick((t) => t + 1)} />
 
       {ideas.length > 0 && (
         <>
