@@ -359,9 +359,39 @@ for (const t of new Set([...topLong, ...topShort])) {
   };
 }
 
-// Shortlist enrichment: company/industry descriptor from Yahoo's search
-// endpoint (the only profile-ish endpoint left outside the crumb wall —
-// quoteSummary returns 401 Invalid Crumb without a session). ~40 requests.
+// Shortlist enrichment (~40 tickers, best-effort):
+//  - name casing + "Industry · Exchange" line from the crumb-free search endpoint
+//  - a 1-sentence business description from quoteSummary/assetProfile, which
+//    sits behind Yahoo's auth crumb: obtain a session cookie (fc.yahoo.com)
+//    and crumb (v1/test/getcrumb) once, then pass both per request.
+async function getYahooSession() {
+  try {
+    const r1 = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': UA }, redirect: 'manual' });
+    const cookie = r1.headers.get('set-cookie')?.split(';')[0] ?? '';
+    if (!cookie) return null;
+    const r2 = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': UA, Cookie: cookie },
+    });
+    const crumb = (await r2.text()).trim();
+    if (!r2.ok || !crumb || crumb.includes('<')) return null;
+    return { cookie, crumb };
+  } catch {
+    return null;
+  }
+}
+
+function firstSentence(text, maxLen = 280) {
+  if (!text) return '';
+  // First sentence boundary that isn't an abbreviation like "Inc." / "Co."
+  const m = text.match(/^.{20,}?(?<!\b(?:Inc|Co|Corp|Ltd|S\.A|N\.V|U\.S))\.(?=\s|$)/s);
+  let s = m ? m[0] : text;
+  if (s.length > maxLen) s = s.substring(0, maxLen - 1).replace(/\s+\S*$/, '') + '…';
+  return s.trim();
+}
+
+const yahooSession = await getYahooSession();
+if (!yahooSession) console.warn('No Yahoo crumb session — descriptions fall back to industry lines.');
+
 for (const t of new Set([...topLong, ...topShort])) {
   const row = scored.find((r) => r.t === t);
   if (!row) continue;
@@ -376,15 +406,31 @@ for (const t of new Set([...topLong, ...topShort])) {
       if (q) {
         if (q.longname || q.shortname) row.n = q.longname || q.shortname; // nicer casing than the holdings CSV
         const bits = [q.industry, q.exchDisp].filter(Boolean);
-        if (bits.length) row.d = bits.join(' · ');
+        if (bits.length) row.ind = bits.join(' · ');
       }
     }
-  } catch { /* descriptor is best-effort */ }
-  await sleep(150);
+  } catch { /* best-effort */ }
+
+  if (yahooSession) {
+    try {
+      const res = await fetch(
+        `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(t)}?modules=assetProfile&crumb=${encodeURIComponent(yahooSession.crumb)}`,
+        { headers: { 'User-Agent': UA, Cookie: yahooSession.cookie } },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const summary = data.quoteSummary?.result?.[0]?.assetProfile?.longBusinessSummary;
+        const s = firstSentence(summary);
+        if (s) row.d = s;
+      }
+    } catch { /* best-effort */ }
+  }
+  if (!row.d && row.ind) row.d = row.ind; // fallback: at least the industry line
+  await sleep(200);
 }
 
 const artifact = {
-  version: 2, // bump forces refresh-discovery.mjs to regenerate instead of reusing
+  version: 3, // bump forces refresh-discovery.mjs to regenerate instead of reusing
   fetchedAt: new Date().toISOString(),
   stats: {
     poolSize: tickers.length,

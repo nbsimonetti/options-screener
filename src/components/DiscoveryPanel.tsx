@@ -207,10 +207,11 @@ function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, o
       {isExpanded && (
         <tr className="border-b border-slate-700/50">
           <td colSpan={10} className="px-4 py-2 bg-slate-900/50">
-            {(row.n || row.d) && (
-              <div className="mb-1.5 text-xs text-slate-300">
+            {(row.n || row.d || row.ind) && (
+              <div className="mb-1.5 text-xs">
                 <span className="font-semibold text-white">{row.n || row.t}</span>
-                {row.d && <span className="text-slate-400"> — {row.d}</span>}
+                {row.ind && row.ind !== row.d && <span className="text-slate-500"> · {row.ind}</span>}
+                {row.d && <p className="mt-0.5 text-slate-300 leading-relaxed max-w-[720px]">{row.d}</p>}
               </div>
             )}
             <div className="flex flex-wrap gap-3">

@@ -13,7 +13,7 @@ const LIVE_URL = 'https://nbsimonetti.github.io/options-screener/discovery-data.
 const MAX_AGE_H = 20;
 // Must match the version written by build-discovery-data.mjs — a mismatch
 // (schema change) forces regeneration instead of reusing a stale shape.
-const EXPECTED_VERSION = 2;
+const EXPECTED_VERSION = 3;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outPath = join(here, '..', 'public', 'discovery-data.json');
