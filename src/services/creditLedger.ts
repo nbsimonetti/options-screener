@@ -86,14 +86,18 @@ export function getRemainingCredits(): number {
 //
 // Priorities (highest first): marking open paper positions is the smallest,
 // highest-value spend and is funded first; user-initiated lookups get a
-// reserve; the remainder is split between the short and long scans. Scans are
-// expected to degrade to cached-only data when their allocation runs out.
+// small reserve; everything else is a SHARED scan pool drawn first-come-
+// first-served. Scans run one at a time on the user's own click, so a fixed
+// short/long split just strands credits: the old 50/50 split capped the
+// short scan at ~4,700 on a fresh Starter day while a cold full-universe
+// scan costs ~6,200 (and the long scan never needs more than ~2,000).
+// Each scan is still capped by its own per-scan default, and every scan
+// degrades to cached-only data when the pool runs out.
 
 export interface BudgetAllocation {
   marking: number;
   lookupReserve: number;
-  shortScan: number;
-  longScan: number;
+  scanAvailable: number; // shared pool for whichever scan runs next
 }
 
 export function allocateBudget(openPaperPositions: number): BudgetAllocation {
@@ -102,13 +106,13 @@ export function allocateBudget(openPaperPositions: number): BudgetAllocation {
   // buffered ×2 so a retry or second cycle in the day still marks.
   const marking = Math.min(remaining, Math.max(10, openPaperPositions * 4));
   const afterMarking = Math.max(0, remaining - marking);
-  const lookupReserve = Math.round(afterMarking * 0.05);
-  const scannable = afterMarking - lookupReserve;
+  // Lookups cost ~21 credits each; a flat ~10-lookup reserve (2% of budget,
+  // min 100) protects them without starving scans the way 5% did.
+  const lookupReserve = Math.min(afterMarking, Math.max(100, Math.round(getDailyCreditBudget() * 0.02)));
   return {
     marking,
     lookupReserve,
-    shortScan: Math.floor(scannable * 0.5),
-    longScan: Math.floor(scannable * 0.5),
+    scanAvailable: Math.max(0, afterMarking - lookupReserve),
   };
 }
 

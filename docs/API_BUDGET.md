@@ -27,8 +27,8 @@ Biggest single lever: the paper book's daily marking — the highest-value data 
 Priorities, funded from the configured daily budget minus what today's ledger already spent:
 
 1. **Marking open paper positions** — funded first (`max(10, positions × 4)` credits: option quote + underlying fallback, ×2 buffer). Smallest, highest-value spend; portfolio stops/targets cannot be evaluated without it.
-2. **User-initiated lookups** — 5% reserve of what remains.
-3. **Short scan / Long scan** — 50/50 split of the remainder, each additionally capped by its own default (8,000 / 2,000).
+2. **User-initiated lookups** — a flat ~10-lookup reserve (2% of the daily budget, min 100 credits).
+3. **Scans** — everything else is one **shared pool drawn first-come-first-served**, with each scan capped by its own per-scan default (short 8,000 / long 2,000). Scans run one at a time on the user's own click, so pre-splitting the pool only strands credits: the original 50/50 split capped the short scan at ~4,700 on a fresh Starter day — below the ~6,200 cost of a cold full-universe scan — while reserving thousands the long scan never uses. With the shared pool, a fresh day gives the short scan its full 8,000 cap and still leaves ~1,600 plus the reserves for a long scan afterward (which typically needs only a few hundred, since it pays credits solely for factor-qualified tickers).
 
 Enforcement is graceful everywhere: when an allocation runs out mid-scan, the scanner switches to **cached-only mode** (cache reads cost nothing) and the UI shows a "budget low — served from cache" notice instead of a hard `BudgetExceededError`. The paper engine carries forward the last mark and journals the skip; entries are blocked only when marks are > 3 trading days stale.
 

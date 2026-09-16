@@ -46,7 +46,7 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
     setExpandedId(null);
     try {
       const alloc = allocateBudget(loadPortfolio().positions.length);
-      const budget = Math.min(DEFAULT_LONG_SCAN_CREDITS, alloc.longScan);
+      const budget = Math.min(DEFAULT_LONG_SCAN_CREDITS, alloc.scanAvailable);
       setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting long scan...', requestsUsed: 0, requestBudget: budget });
       const result = await scanForLongIdeas(universe, setProgress, apiConfig.marketDataToken || undefined, budget);
       onIdeasChange(result.ideas);

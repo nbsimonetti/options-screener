@@ -159,7 +159,7 @@ function CreditBudgetControls() {
         {ledger.total > 0 && (
           <> &middot; scans {ledger.byCategory.shortScan + ledger.byCategory.longScan} &middot; marking {ledger.byCategory.marking} &middot; lookups {ledger.byCategory.lookup + ledger.byCategory.other}</>
         )}
-        . Marking open paper positions is funded first; scans degrade to cached data when the budget runs low.
+        . Marking open paper positions is funded first, lookups keep a small reserve, and scans share the rest first-come-first-served — degrading to cached data when it runs low.
       </p>
     </div>
   );
