@@ -66,17 +66,26 @@ export function avgAbsDailyReturn(closes: number[], window = 20): number {
   return (s / window) * 100;
 }
 
-/** Median absolute % move over rolling windows of `horizon` trading days across the history. */
-export function medianHistoricalMove(closes: number[], horizonDays: number): { median: number; p75: number } {
+/**
+ * Historical |move| distribution over rolling windows of `horizon` trading
+ * days. `sigmaEquiv` is the median scaled by 1.4826 (the MAD→σ constant):
+ * for normal-ish returns median|move| ≈ 0.674σ, so a 1σ implied expected
+ * move must be compared against median × 1.4826 to be apples-to-apples —
+ * comparing against the raw median rejects even perfectly fair pricing at
+ * a ~1.49 ratio.
+ */
+export function medianHistoricalMove(closes: number[], horizonDays: number): { median: number; sigmaEquiv: number; p90: number } {
   const moves: number[] = [];
   for (let i = 0; i + horizonDays < closes.length; i++) {
     moves.push(Math.abs(closes[i + horizonDays] / closes[i] - 1));
   }
-  if (moves.length < 10) return { median: NaN, p75: NaN };
+  if (moves.length < 10) return { median: NaN, sigmaEquiv: NaN, p90: NaN };
   moves.sort((a, b) => a - b);
+  const median = moves[Math.floor(moves.length * 0.5)];
   return {
-    median: moves[Math.floor(moves.length * 0.5)],
-    p75: moves[Math.floor(moves.length * 0.75)],
+    median,
+    sigmaEquiv: median * 1.4826,
+    p90: moves[Math.floor(moves.length * 0.9)],
   };
 }
 

@@ -29,6 +29,7 @@ export interface LongScanResult {
   degradedToCacheOnly: boolean;
   creditsUsed: number;
   skips: string[]; // human-readable skip/veto log
+  stageCounts: Record<string, number>; // rejections per funnel stage (for tuning)
 }
 
 function delay(ms: number): Promise<void> {
@@ -111,6 +112,11 @@ export async function scanForLongIdeas(
   let cacheOnly = scanCredits === 0;
   const ideas: LongIdea[] = [];
   const skips: string[] = [];
+  const stageCounts: Record<string, number> = {};
+  const reject = (stage: string, msg: string) => {
+    stageCounts[stage] = (stageCounts[stage] ?? 0) + 1;
+    skips.push(msg);
+  };
   const total = universe.length;
   const now = new Date().toISOString();
 
@@ -140,7 +146,7 @@ export async function scanForLongIdeas(
     try {
       // --- Factor stage (free: Yahoo history only) ---
       const bars = await fetchHistory(ticker).catch(() => null);
-      if (!bars || bars.closes.length < 260) { skips.push(`${ticker}: insufficient history`); continue; }
+      if (!bars || bars.closes.length < 260) { reject('history', `${ticker}: insufficient history`); continue; }
       const close = bars.closes[bars.closes.length - 1];
 
       // Stage 0 underlying floor
@@ -148,9 +154,9 @@ export async function scanForLongIdeas(
       const hv20 = historicalVol(bars.closes, 20);
       const hv30 = historicalVol(bars.closes, 30);
       const hv60 = historicalVol(bars.closes, 60);
-      if (close < 20) { skips.push(`${ticker}: price $${close.toFixed(0)} < $20`); continue; }
-      if (advDollar < 25e6) { skips.push(`${ticker}: dollar volume < $25M`); continue; }
-      if (hv20 < 15) { skips.push(`${ticker}: HV20 ${hv20.toFixed(0)}% < 15% (dead stock)`); continue; }
+      if (close < 20) { reject('stage0-floor', `${ticker}: price $${close.toFixed(0)} < $20`); continue; }
+      if (advDollar < 25e6) { reject('stage0-floor', `${ticker}: dollar volume < $25M`); continue; }
+      if (hv20 < 15) { reject('stage0-floor', `${ticker}: HV20 ${hv20.toFixed(0)}% < 15% (dead stock)`); continue; }
 
       const info = getSectorInfo(ticker);
       if (!sectorBars.has(info.etf)) {
@@ -168,24 +174,19 @@ export async function scanForLongIdeas(
       let direction: 'bull' | 'bear' | null = null;
       if (bull.score >= BULL_WATCH && bull.score >= bear.score && !bull.gated) direction = 'bull';
       else if (bear.score >= BEAR_WATCH && !bear.gated) direction = 'bear';
-      if (!direction) continue;
+      if (!direction) { stageCounts['factor-threshold'] = (stageCounts['factor-threshold'] ?? 0) + 1; continue; }
 
       const result = direction === 'bull' ? bull : bear;
       const side: 'call' | 'put' = direction === 'bull' ? 'call' : 'put';
       const watchFloor = direction === 'bull' ? BULL_WATCH : BEAR_WATCH;
       const tradeFloor = direction === 'bull' ? BULL_TRADE : BEAR_TRADE;
 
-      // Dead-stock disambiguation (stage 1c)
-      const aliveA = avgAbsDailyReturn(bars.closes, 20) >= 0.8;
-      const aliveB = hv20 >= 0.75 * hv60;
-      if (!aliveA || !aliveB) { skips.push(`${ticker}: failed alive checks (avg |ret| or HV trend)`); continue; }
-
       // --- Options stage (credits) ---
-      if (cacheOnly) { skips.push(`${ticker}: credit budget exhausted (factor score ${result.score.toFixed(0)})`); continue; }
+      if (cacheOnly) { reject('budget', `${ticker}: credit budget exhausted (factor score ${result.score.toFixed(0)})`); continue; }
       try {
         enforceBudget(scanCredits);
       } catch (e) {
-        if (e instanceof BudgetExceededError) { cacheOnly = true; skips.push(`${ticker}: credit budget exhausted`); continue; }
+        if (e instanceof BudgetExceededError) { cacheOnly = true; reject('budget', `${ticker}: credit budget exhausted`); continue; }
         throw e;
       }
 
@@ -193,46 +194,67 @@ export async function scanForLongIdeas(
       const price = quote.last || quote.mid || close;
       const expirations = await getExpirations(ticker, marketDataToken);
       const expiration = pickLongExpiration(expirations);
-      if (!expiration) { skips.push(`${ticker}: no expiration in 45–150 DTE`); continue; }
+      if (!expiration) { reject('expirations', `${ticker}: no expiration in 45–150 DTE`); continue; }
 
       const chain = await getOptionChain(ticker, marketDataToken, { expiration, side, strikeLimit: 12 });
-      if (chain.length === 0) { skips.push(`${ticker}: empty chain`); continue; }
+      if (chain.length === 0) { reject('chain', `${ticker}: empty chain`); continue; }
 
       // Resolve IV rank from the fetched chain (records today's sample)
       const ivData = resolveIVRank(ticker, chain, price);
       const ivRank = ivData.ivRank;
       const ivRankSource = ivData.source ?? 'smile';
 
-      // Re-apply IVR gates with the real number (funnel stage 1a)
-      const hardGate = direction === 'bull' ? 65 : 55;
-      if (ivRank > 50) { skips.push(`${ticker}: IVR ${ivRank.toFixed(0)} > 50 (long premium too expensive)`); continue; }
-      if (ivRank > hardGate) { skips.push(`${ticker}: IVR gate`); continue; }
+      // Re-apply the IVR gate with the real number (funnel stage 1a)
+      if (ivRank > 50) { reject('ivr-gate', `${ticker}: IVR ${ivRank.toFixed(0)} > 50 (long premium too expensive)`); continue; }
+
+      // Dead-stock disambiguation (stage 1c) — per the research brief this
+      // applies at the EXTREME-cheap end (IVR < 10), where low IV is either
+      // a bargain or an accurate forecast of a stock that stopped moving.
+      // Applying it at every IVR (as originally shipped) rejected half the
+      // large caps in any calm tape.
+      if (ivRank < 10) {
+        const aliveA = avgAbsDailyReturn(bars.closes, 20) >= 0.8;
+        const aliveB = hv20 >= 0.75 * hv60;
+        if (!aliveA || !aliveB) { reject('dead-stock', `${ticker}: IVR ${ivRank.toFixed(0)} with failed alive checks — low IV looks like a correct forecast, not a bargain`); continue; }
+      }
 
       const pick = pickContract(chain, side);
-      if ('reject' in pick && pick.reject) { skips.push(`${ticker}: ${pick.reject}`); continue; }
+      if ('reject' in pick && pick.reject) { reject('liquidity', `${ticker}: ${pick.reject}`); continue; }
       const { opt, liquidityScore } = pick as ContractPick;
 
       const mid = opt.mid || (opt.bid + opt.ask) / 2;
       const ivPct = (opt.iv || 0) * 100;
 
-      // Stage 1b: IV vs realized
+      // Stage 1b: IV vs realized. Hard reject only above 1.25; the marginal
+      // band (1.10–1.25) passes with a flag when IVR ≤ 30 — cheap-vs-history
+      // partially offsets paying slightly above realized.
       const ivHvRatio = ivPct / Math.max(hv20, hv30, 1);
-      if (ivHvRatio > 1.25) { skips.push(`${ticker}: IV/HV ${ivHvRatio.toFixed(2)} > 1.25`); continue; }
-      if (ivHvRatio > 1.10 && ivRank > 20) { skips.push(`${ticker}: IV/HV ${ivHvRatio.toFixed(2)} with IVR ${ivRank.toFixed(0)}`); continue; }
+      let ivHvFlag = '';
+      if (ivHvRatio > 1.25) { reject('iv-vs-hv', `${ticker}: IV/HV ${ivHvRatio.toFixed(2)} > 1.25`); continue; }
+      if (ivHvRatio > 1.10) {
+        if (ivRank > 30) { reject('iv-vs-hv', `${ticker}: IV/HV ${ivHvRatio.toFixed(2)} with IVR ${ivRank.toFixed(0)} > 30`); continue; }
+        ivHvFlag = `IV is ${ivHvRatio.toFixed(2)}× realized vol — paying slightly above fair; a debit spread trims the markup`;
+      }
 
-      // Stage 3: expected vs historical move over the holding horizon
+      // Stage 3: expected vs historical move over the holding horizon.
+      // Compared against the SIGMA-EQUIVALENT of the historical median
+      // (median × 1.4826): the implied EM is a 1σ move while the median
+      // |move| is only ~0.67σ, so the raw-median ratio sat near 1.49 even at
+      // perfectly fair pricing and rejected essentially everything.
       const horizon = Math.min(opt.dte, 90);
       const tradingDays = Math.round(horizon * 252 / 365);
       const impliedEM = price * (ivPct / 100) * Math.sqrt(horizon / 365);
       const hist = medianHistoricalMove(bars.closes, Math.max(10, tradingDays));
-      const emRatio = Number.isFinite(hist.median) && hist.median > 0 ? (impliedEM / price) / hist.median : 1;
-      if (emRatio > 1.20) { skips.push(`${ticker}: implied move ${emRatio.toFixed(2)}× historical median`); continue; }
-      if (Number.isFinite(hist.p75) && impliedEM / price > hist.p75) { skips.push(`${ticker}: implied move above p75 historical`); continue; }
+      const emRatio = Number.isFinite(hist.sigmaEquiv) && hist.sigmaEquiv > 0 ? (impliedEM / price) / hist.sigmaEquiv : 1;
+      if (emRatio > 1.20) { reject('expected-move', `${ticker}: implied move ${emRatio.toFixed(2)}× historical σ-equivalent`); continue; }
+      if (Number.isFinite(hist.p90) && impliedEM / price > hist.p90) { reject('expected-move', `${ticker}: implied move above p90 of historical moves`); continue; }
 
+      // Extrinsic sanity: hard reject only when time value dominates an
+      // ITM contract (> 55%); 40–55% passes flagged.
       const intrinsic = side === 'call' ? Math.max(0, price - opt.strike) : Math.max(0, opt.strike - price);
       const extrinsicPct = mid > 0 ? Math.max(0, mid - intrinsic) / mid : 1;
-      if (extrinsicPct > 0.40 && Math.abs(opt.delta) >= 0.55) {
-        skips.push(`${ticker}: extrinsic ${(extrinsicPct * 100).toFixed(0)}% at ${Math.abs(opt.delta).toFixed(2)}Δ — IV fatter than deltas imply`);
+      if (extrinsicPct > 0.55 && Math.abs(opt.delta) >= 0.55) {
+        reject('extrinsic', `${ticker}: extrinsic ${(extrinsicPct * 100).toFixed(0)}% at ${Math.abs(opt.delta).toFixed(2)}Δ — IV far fatter than deltas imply`);
         continue;
       }
 
@@ -246,9 +268,10 @@ export async function scanForLongIdeas(
 
       // Flags (stage 6 — warn, don't reject)
       const flags: string[] = [];
+      if (ivHvFlag) flags.push(ivHvFlag);
       if (ivRank > 30) flags.push(`IVR ${ivRank.toFixed(0)} > 30 — a debit spread would cut vega/theta cost`);
-      if (emRatio > 1.0) flags.push('Implied move exceeds the historical median for this horizon');
-      if (extrinsicPct > 0.60) flags.push(`Extrinsic is ${(extrinsicPct * 100).toFixed(0)}% of premium — heavy theta bill`);
+      if (emRatio > 1.0) flags.push('Implied move exceeds the historical σ-equivalent for this horizon');
+      if (extrinsicPct > 0.40) flags.push(`Extrinsic is ${(extrinsicPct * 100).toFixed(0)}% of premium — heavy theta bill`);
       if (ivRankSource === 'smile') flags.push('IVR is a smile-shape estimate until 20 daily samples accrue');
 
       // Blended display score
@@ -301,13 +324,13 @@ export async function scanForLongIdeas(
       });
     } catch (e) {
       if (e instanceof BudgetExceededError) { cacheOnly = true; continue; }
-      skips.push(`${ticker}: ${e instanceof Error ? e.message.substring(0, 80) : 'failed'}`);
+      reject('error', `${ticker}: ${e instanceof Error ? e.message.substring(0, 80) : 'failed'}`);
     }
 
     if (i < universe.length - 1) await delay(SCAN_DELAY_MS);
   }
 
   ideas.sort((a, b) => b.overallScore - a.overallScore);
-  console.debug('[longScanner]', { ideas: ideas.length, creditsUsed: getCreditCount(), cacheOnly, skips });
-  return { ideas, degradedToCacheOnly: cacheOnly, creditsUsed: getCreditCount(), skips };
+  console.debug('[longScanner]', { ideas: ideas.length, creditsUsed: getCreditCount(), cacheOnly, stageCounts, skips });
+  return { ideas, degradedToCacheOnly: cacheOnly, creditsUsed: getCreditCount(), skips, stageCounts };
 }

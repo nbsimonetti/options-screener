@@ -53,7 +53,14 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
       setSkips(result.skips);
       const notices: string[] = [];
       if (result.degradedToCacheOnly) notices.push('Credit budget ran low — some qualified tickers were skipped at the options stage.');
-      if (result.ideas.length === 0) notices.push('No candidates cleared the funnel — long premium demands cheap vol AND directional structure, so an empty day is normal.');
+      if (result.ideas.length === 0) {
+        const stages = Object.entries(result.stageCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 4)
+          .map(([k, v]) => `${k} ${v}`)
+          .join(' · ');
+        notices.push(`No candidates cleared the funnel — long premium demands cheap vol AND directional structure, so an empty day is normal.${stages ? ` Rejections by stage: ${stages}.` : ''}`);
+      }
       if (historySource() === 'static-snapshot') {
         const fetchedAt = await getHistorySnapshotAge();
         if (fetchedAt) {
