@@ -69,13 +69,52 @@ interface StaticHistoryFile {
 const STATIC_HISTORY_URL = `${import.meta.env.BASE_URL}history-data.json`;
 let staticHistoryPromise: Promise<StaticHistoryFile | null> | null = null;
 
+async function fetchSnapshotOnce(): Promise<StaticHistoryFile | null> {
+  try {
+    // no-cache = revalidate against the server (cheap 304 on GH Pages) so a
+    // previously cached truncated/bad body can't keep serving.
+    const res = await fetch(STATIC_HISTORY_URL, { cache: 'no-cache' });
+    if (!res.ok) return null;
+    const data: StaticHistoryFile = await res.json();
+    if (!data?.bars || Object.keys(data.bars).length < 40) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 function loadStaticHistory(): Promise<StaticHistoryFile | null> {
   if (!staticHistoryPromise) {
-    staticHistoryPromise = fetch(STATIC_HISTORY_URL)
-      .then((res) => (res.ok ? (res.json() as Promise<StaticHistoryFile>) : null))
-      .catch(() => null);
+    staticHistoryPromise = (async () => {
+      let snap = await fetchSnapshotOnce();
+      if (!snap) {
+        await new Promise((r) => setTimeout(r, 1500));
+        snap = await fetchSnapshotOnce();
+      }
+      // Never memoize a failure: one transient network hiccup must not
+      // poison every fetchHistory call for the rest of the session.
+      if (!snap) staticHistoryPromise = null;
+      return snap;
+    })();
   }
   return staticHistoryPromise;
+}
+
+/**
+ * Throws (with a clear message) when the production history source is
+ * genuinely unavailable. Called by scanners BEFORE work starts so a snapshot
+ * outage aborts loudly instead of surfacing as dozens of per-ticker
+ * "insufficient history" rejects — localStorage cache can mask the outage
+ * for a handful of tickers, which is exactly how it went undiagnosed.
+ */
+export async function verifyHistorySource(): Promise<void> {
+  if (import.meta.env.DEV) return;
+  const snap = await loadStaticHistory();
+  if (!snap) {
+    throw new HistoryUnavailableError(
+      'history-data.json could not be loaded from the site (network hiccup or bad cached copy). Re-run the scan — the loader retries fresh each attempt. If it persists, check the deploy workflow.',
+    );
+  }
 }
 
 export function historySource(): 'live-proxy' | 'static-snapshot' {

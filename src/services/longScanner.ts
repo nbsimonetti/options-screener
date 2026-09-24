@@ -10,7 +10,7 @@ import {
   resetRequestCount, getCreditCount, BudgetExceededError, enforceBudget, setCreditCategory,
 } from './marketdata';
 import type { MDOption } from './marketdata';
-import { fetchHistory, HistoryUnavailableError, type DailyBars } from './history';
+import { fetchHistory, verifyHistorySource, HistoryUnavailableError, type DailyBars } from './history';
 import {
   computeBullish, computeBearish, detectEntryTrigger,
   atr14, historicalVol, avgAbsDailyReturn, medianHistoricalMove, sma,
@@ -139,8 +139,11 @@ export async function scanForLongIdeas(
   };
 
   emit({ message: 'Fetching benchmark history (SPY + sectors)...' });
-  // Preflight: if the history source itself is unavailable (missing snapshot
-  // on the static build), fail the scan loudly instead of 51 cryptic skips.
+  // Preflight: verify the history SOURCE itself (production snapshot) before
+  // any work. This cannot be masked by localStorage cache the way a plain
+  // SPY fetch can — a snapshot outage aborts loudly here instead of
+  // surfacing as dozens of per-ticker "history" rejects.
+  await verifyHistorySource();
   let spy: DailyBars | null;
   try {
     spy = await fetchHistory('SPY');
@@ -156,8 +159,19 @@ export async function scanForLongIdeas(
 
     try {
       // --- Factor stage (free: Yahoo history only) ---
-      const bars = await fetchHistory(ticker).catch(() => null);
-      if (!bars || bars.closes.length < 260) { reject('history', `${ticker}: insufficient history`); continue; }
+      // Keep the REAL failure reason — "insufficient history" as a blanket
+      // label hid a snapshot-fetch outage behind a misleading message.
+      let bars: DailyBars | null = null;
+      let histErr = '';
+      try {
+        bars = await fetchHistory(ticker);
+      } catch (e) {
+        histErr = e instanceof Error ? e.message.substring(0, 110) : 'history fetch failed';
+      }
+      if (!bars || bars.closes.length < 260) {
+        reject('history', `${ticker}: ${histErr || `only ${bars?.closes.length ?? 0} bars (need 260)`}`);
+        continue;
+      }
       const close = bars.closes[bars.closes.length - 1];
 
       // Stage 0 underlying floor
