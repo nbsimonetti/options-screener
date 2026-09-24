@@ -106,9 +106,11 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
         <div className="mt-3 flex items-start gap-3 rounded border border-sky-700/40 bg-sky-900/15 p-3">
           <Info className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
           <p className="text-xs text-sky-200/90">
-            The long screener is the inverse of the income screener: it demands <b>low</b> IV Rank (≤ 50, ideally 5–30),
-            IV cheap vs. realized movement, ITM 0.55–0.75Δ contracts at 60–120 DTE, and directional factor confluence
-            (momentum, trend quality, relative strength). Full spec in <span className="font-mono">docs/LONG_STRATEGY_DESIGN.md</span>.
+            The long screener <b>ranks the best available</b> directional setups: ITM 0.55–0.75Δ contracts at 60–120 DTE on
+            names with factor confluence (momentum, trend quality, relative strength). The <b>trade</b> tier still demands the
+            strict research criteria (IVR ≤ 50, IV ≤ 1.25× realized, fair expected move); everything else appears as
+            <b> watchlist</b> with its shortfalls flagged — rich vol, stretched implied moves, modest realized vol. Only
+            illiquid or extreme names are hidden. Full spec in <span className="font-mono">docs/LONG_STRATEGY_DESIGN.md</span>.
           </p>
         </div>
 

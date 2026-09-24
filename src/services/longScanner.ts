@@ -20,8 +20,19 @@ import { getSectorInfo } from './sectors';
 import { getRemainingCredits } from './creditLedger';
 
 export const DEFAULT_LONG_SCAN_CREDITS = 2000;
-const BULL_TRADE = 70, BULL_WATCH = 60;
-const BEAR_TRADE = 75, BEAR_WATCH = 65;
+// Funnel philosophy (retuned 2026-09-24): the screener RANKS the best
+// available setups instead of gatekeeping for the textbook-ideal one.
+// Quality shortfalls (rich vol, stretched expected move, mid HV) become
+// score penalties + flags; hard rejects are reserved for true viability
+// failures (illiquidity, missing data, extremes). The 'trade' tier still
+// demands the research-brief criteria; everything else surfaces as
+// 'watchlist' with its problems stated.
+const BULL_TRADE = 70, BULL_WATCH = 55;
+const BEAR_TRADE = 75, BEAR_WATCH = 60;
+const HV_HARD_FLOOR = 12;   // stage-0 reject below (was 15; 12-15 now flagged)
+const IVR_HARD_MAX = 65;    // reject above (was 50; 50-65 now penalized+flagged)
+const IVHV_HARD_MAX = 1.6;  // reject above (was 1.25; bands below flagged)
+const EM_HARD_MAX = 1.5;    // reject above (was 1.2; 1.2-1.5 penalized+flagged)
 const SCAN_DELAY_MS = 400;
 
 export interface LongScanResult {
@@ -156,7 +167,8 @@ export async function scanForLongIdeas(
       const hv60 = historicalVol(bars.closes, 60);
       if (close < 20) { reject('stage0-floor', `${ticker}: price $${close.toFixed(0)} < $20`); continue; }
       if (advDollar < 25e6) { reject('stage0-floor', `${ticker}: dollar volume < $25M`); continue; }
-      if (hv20 < 15) { reject('stage0-floor', `${ticker}: HV20 ${hv20.toFixed(0)}% < 15% (dead stock)`); continue; }
+      if (hv20 < HV_HARD_FLOOR) { reject('stage0-floor', `${ticker}: HV20 ${hv20.toFixed(0)}% < ${HV_HARD_FLOOR}% (dead stock)`); continue; }
+      const lowHvFlag = hv20 < 15 ? `HV20 ${hv20.toFixed(0)}% is modest — the underlying must trend, not just wiggle` : '';
 
       const info = getSectorInfo(ticker);
       if (!sectorBars.has(info.etf)) {
@@ -178,7 +190,6 @@ export async function scanForLongIdeas(
 
       const result = direction === 'bull' ? bull : bear;
       const side: 'call' | 'put' = direction === 'bull' ? 'call' : 'put';
-      const watchFloor = direction === 'bull' ? BULL_WATCH : BEAR_WATCH;
       const tradeFloor = direction === 'bull' ? BULL_TRADE : BEAR_TRADE;
 
       // --- Options stage (credits) ---
@@ -204,8 +215,11 @@ export async function scanForLongIdeas(
       const ivRank = ivData.ivRank;
       const ivRankSource = ivData.source ?? 'smile';
 
-      // Re-apply the IVR gate with the real number (funnel stage 1a)
-      if (ivRank > 50) { reject('ivr-gate', `${ticker}: IVR ${ivRank.toFixed(0)} > 50 (long premium too expensive)`); continue; }
+      // Re-apply the IVR gate with the real number (funnel stage 1a).
+      // > 65 rejects; 50–65 passes penalized + flagged (vol isn't cheap, but
+      // a strong directional setup can still carry a flagged idea).
+      if (ivRank > IVR_HARD_MAX) { reject('ivr-gate', `${ticker}: IVR ${ivRank.toFixed(0)} > ${IVR_HARD_MAX} (long premium far too expensive)`); continue; }
+      const richIvrFlag = ivRank > 50 ? `IVR ${ivRank.toFixed(0)} — vol is NOT cheap; strongly prefer the debit-spread structure` : '';
 
       // Dead-stock disambiguation (stage 1c) — per the research brief this
       // applies at the EXTREME-cheap end (IVR < 10), where low IV is either
@@ -225,14 +239,16 @@ export async function scanForLongIdeas(
       const mid = opt.mid || (opt.bid + opt.ask) / 2;
       const ivPct = (opt.iv || 0) * 100;
 
-      // Stage 1b: IV vs realized. Hard reject only above 1.25; the marginal
-      // band (1.10–1.25) passes with a flag when IVR ≤ 30 — cheap-vs-history
-      // partially offsets paying slightly above realized.
+      // Stage 1b: IV vs realized. The volatility risk premium means most
+      // names sit at 1.1–1.4× most of the time — treat that as a cost to
+      // rank on (and flag), not a disqualifier. Only a truly rich > 1.6
+      // rejects outright.
       const ivHvRatio = ivPct / Math.max(hv20, hv30, 1);
       let ivHvFlag = '';
-      if (ivHvRatio > 1.25) { reject('iv-vs-hv', `${ticker}: IV/HV ${ivHvRatio.toFixed(2)} > 1.25`); continue; }
-      if (ivHvRatio > 1.10) {
-        if (ivRank > 30) { reject('iv-vs-hv', `${ticker}: IV/HV ${ivHvRatio.toFixed(2)} with IVR ${ivRank.toFixed(0)} > 30`); continue; }
+      if (ivHvRatio > IVHV_HARD_MAX) { reject('iv-vs-hv', `${ticker}: IV/HV ${ivHvRatio.toFixed(2)} > ${IVHV_HARD_MAX}`); continue; }
+      if (ivHvRatio > 1.25) {
+        ivHvFlag = `IV is ${ivHvRatio.toFixed(2)}× realized vol — a meaningful markup; a debit spread trims it substantially`;
+      } else if (ivHvRatio > 1.10) {
         ivHvFlag = `IV is ${ivHvRatio.toFixed(2)}× realized vol — paying slightly above fair; a debit spread trims the markup`;
       }
 
@@ -246,7 +262,7 @@ export async function scanForLongIdeas(
       const impliedEM = price * (ivPct / 100) * Math.sqrt(horizon / 365);
       const hist = medianHistoricalMove(bars.closes, Math.max(10, tradingDays));
       const emRatio = Number.isFinite(hist.sigmaEquiv) && hist.sigmaEquiv > 0 ? (impliedEM / price) / hist.sigmaEquiv : 1;
-      if (emRatio > 1.20) { reject('expected-move', `${ticker}: implied move ${emRatio.toFixed(2)}× historical σ-equivalent`); continue; }
+      if (emRatio > EM_HARD_MAX) { reject('expected-move', `${ticker}: implied move ${emRatio.toFixed(2)}× historical σ-equivalent`); continue; }
       if (Number.isFinite(hist.p90) && impliedEM / price > hist.p90) { reject('expected-move', `${ticker}: implied move above p90 of historical moves`); continue; }
 
       // Extrinsic sanity: hard reject only when time value dominates an
@@ -268,11 +284,19 @@ export async function scanForLongIdeas(
 
       // Flags (stage 6 — warn, don't reject)
       const flags: string[] = [];
+      if (lowHvFlag) flags.push(lowHvFlag);
+      if (richIvrFlag) flags.push(richIvrFlag);
       if (ivHvFlag) flags.push(ivHvFlag);
-      if (ivRank > 30) flags.push(`IVR ${ivRank.toFixed(0)} > 30 — a debit spread would cut vega/theta cost`);
-      if (emRatio > 1.0) flags.push('Implied move exceeds the historical σ-equivalent for this horizon');
+      if (!richIvrFlag && ivRank > 30) flags.push(`IVR ${ivRank.toFixed(0)} > 30 — a debit spread would cut vega/theta cost`);
+      if (emRatio > 1.2) flags.push(`Implied move is ${emRatio.toFixed(2)}× the historical σ-equivalent — the market is pricing an outsized move`);
+      else if (emRatio > 1.0) flags.push('Implied move slightly exceeds the historical σ-equivalent for this horizon');
       if (extrinsicPct > 0.40) flags.push(`Extrinsic is ${(extrinsicPct * 100).toFixed(0)}% of premium — heavy theta bill`);
       if (ivRankSource === 'smile') flags.push('IVR is a smile-shape estimate until 20 daily samples accrue');
+
+      // 'trade' tier still demands the full research-brief criteria — the
+      // loosened hard gates only decide what gets SHOWN, not what the paper
+      // engine may trade.
+      const researchClean = ivRank <= 50 && ivHvRatio <= 1.25 && emRatio <= 1.2 && !lowHvFlag;
 
       // Blended display score
       const volScore = 0.6 * Math.max(0, 100 - 1.5 * ivRank) + 0.4 * Math.max(0, Math.min(100, ((1.25 - ivHvRatio) / 0.5) * 100));
@@ -319,7 +343,7 @@ export async function scanForLongIdeas(
         atr,
         stopLevel,
         flags,
-        tier: result.score >= tradeFloor && trig ? 'trade' : result.score >= watchFloor ? 'watchlist' : 'watchlist',
+        tier: result.score >= tradeFloor && trig && researchClean ? 'trade' : 'watchlist',
         generatedAt: now,
       });
     } catch (e) {

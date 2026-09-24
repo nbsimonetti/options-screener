@@ -37,7 +37,9 @@ Computed from Yahoo daily OHLCV (free via the dev proxy; ~2y of bars). All score
 
 ## 2. Options screening funnel (Agent B)
 
-Applied to factor-qualified candidates, cheapest checks first:
+> **Retuned 2026-09-24 — rank, don't gatekeep.** After the σ-equivalent fix the funnel still returned nothing in a calm, expensive-vol tape: the research-ideal setup (cheap vol AND fresh directional structure) can be absent for weeks, and a screener that answers "nothing" for weeks is useless as an idea generator. Hard rejects are now reserved for viability failures (illiquidity, missing data, extremes: IVR > 65, IV/HV > 1.6, EM > 1.5×σ-eq, HV20 < 12%); shortfalls inside those bounds pass as **watchlist** ideas with penalties in the blended score and explicit flags. The **trade** tier — the only thing the paper engine may enter — still demands the original research criteria (IVR ≤ 50, IV/HV ≤ 1.25, EM ≤ 1.2, HV20 ≥ 15, composite ≥ threshold, fresh trigger), so loosening what gets *shown* did not loosen what gets *traded*. Factor watch floors dropped 60→55 (bull) / 65→60 (bear).
+
+Applied to factor-qualified candidates, cheapest checks first (thresholds below are the trade-tier / research-clean criteria; parenthetical hard limits decide mere visibility):
 
 - **Stage 0 underlying floor:** price ≥ $20, 20d avg dollar volume ≥ $25M, HV20 ≥ 15% annualized.
 - **Stage 1 vol cheapness:** IV Rank/Percentile ≤ 50 hard (ideal 5–30); IV ÷ max(HV20, HV30) ≤ 1.10 clean, 1.10–1.25 passes **flagged** when IVR ≤ 30, > 1.25 reject (ideal ≤ 0.90); dead-stock checks (avg |daily return| (20d) ≥ 0.8% and HV20 ≥ 0.75 × HV60) apply **only at IVR < 10** — the extreme-cheap end where low IV may be a correct forecast rather than a bargain. _Retuned 2026-09-21: as shipped, the alive checks ran at every IVR (stricter than the research brief) and rejected roughly half the large caps in any calm tape, and the IV/HV marginal band's IVR ≤ 20 condition was rarely certifiable while IV Rank was still a smile estimate; extrinsic sanity cap similarly moved from hard-reject at 40% to flag at 40% / reject at 55%._
