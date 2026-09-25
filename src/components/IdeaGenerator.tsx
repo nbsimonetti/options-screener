@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Sparkles, Loader2, Settings, Plus, X, RotateCcw, Info, ArrowUpDown, ArrowUp, ArrowDown, Bookmark, Save, Pencil, Trash2, Check } from 'lucide-react';
 import type { APIConfig, ScoringWeights, InvestmentIdea, ScanProgress, OptionPosition, ScanFilter, SavedWatchlist } from '../types';
 import { DEFAULT_SCAN_FILTER, LS_SCAN_FILTER, LS_TABLE_SETS } from '../types';
-import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET, normalizeTickers, getSavedWatchlists, getActiveWatchlistId, setActiveWatchlistId, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/universe';
+import { getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault, getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET, normalizeTickers, getSavedWatchlists, getActiveWatchlistId, setActiveWatchlistId, createWatchlist, updateWatchlist, deleteWatchlist, mergeSavedDelta } from '../services/universe';
 import { scanForIdeas, DEFAULT_SCAN_CREDITS } from '../services/scanner';
 import type { ScanCandidate } from '../services/scanner';
 import { generateTheses } from '../services/claude';
@@ -300,6 +300,21 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
   const refreshSaved = () => setSavedWatchlists(getSavedWatchlists());
 
+  // Discovery promotions write straight to storage — into the active saved
+  // watchlist when one is selected, otherwise the default list. Pull both
+  // back in, merging the watchlist change into the working buffer.
+  const syncAfterDiscovery = () => {
+    setWatchlistState(getWatchlist());
+    setExcludedState(getExcluded());
+    const nextSaved = getSavedWatchlists();
+    if (mode === 'watchlist' && activeId !== null) {
+      const prev = savedWatchlists.find((w) => w.id === activeId)?.tickers ?? [];
+      const next = nextSaved.find((w) => w.id === activeId)?.tickers ?? prev;
+      setWorkingTickers((working) => mergeSavedDelta(working, prev, next));
+    }
+    setSavedWatchlists(nextSaved);
+  };
+
   const confirmDiscardIfDirty = () =>
     !dirty || window.confirm('Discard unsaved changes to the current watchlist?');
 
@@ -530,7 +545,8 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
 
       <DiscoveryPanel
         direction="short"
-        onUniverseChange={() => { setWatchlistState(getWatchlist()); setExcludedState(getExcluded()); }}
+        targetLabel={mode === 'watchlist' && activeSnapshot ? activeSnapshot.name : 'default list'}
+        onUniverseChange={syncAfterDiscovery}
       />
 
       {/* Settings panel */}

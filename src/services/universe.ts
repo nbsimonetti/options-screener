@@ -258,3 +258,17 @@ export function deleteWatchlist(id: string, scope: UniverseScope = 'short') {
   persistSavedWatchlists(loadSavedWatchlists(scope).filter((w) => w.id !== id), scope);
   if (getActiveWatchlistId(scope) === id) setActiveWatchlistId(null, scope);
 }
+
+/**
+ * Re-applies an external change to a saved watchlist (e.g. a Discovery
+ * promotion) onto an editor's working buffer. Only the delta between the
+ * old and new saved lists is applied, so unsaved edits in the buffer
+ * survive and a clean buffer stays clean.
+ */
+export function mergeSavedDelta(working: string[], prevSaved: string[], nextSaved: string[]): string[] {
+  const prev = new Set(prevSaved);
+  const next = new Set(nextSaved);
+  const added = nextSaved.filter((t) => !prev.has(t));
+  const removed = new Set(prevSaved.filter((t) => !next.has(t)));
+  return normalizeTickers([...working.filter((t) => !removed.has(t)), ...added]);
+}

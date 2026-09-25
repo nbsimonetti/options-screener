@@ -7,7 +7,9 @@
 // artifact, run `node scripts/build-discovery-data.mjs --limit 120` once to
 // generate a local test pool (it lands in public/, which Vite serves).
 
-import { addTicker, removeTicker } from './universe';
+import {
+  addTicker, removeTicker, getActiveWatchlistId, getSavedWatchlists, updateWatchlist, normalizeTickers,
+} from './universe';
 import type { UniverseScope } from './universe';
 import type { DailyBars } from './history';
 
@@ -81,6 +83,7 @@ export interface PromotedRecord {
   ticker: string;
   promotedAt: string; // ISO
   direction: 'long' | 'short';
+  watchlistId?: string; // set when the ticker went into a saved watchlist rather than the default list
 }
 
 export function getPromoted(): PromotedRecord[] {
@@ -98,26 +101,65 @@ function savePromoted(list: PromotedRecord[]) {
 }
 
 // Each Idea Generator has its own universe: bullish discovery candidates
-// feed the Long tab, bearish ones the Short tab.
+// feed the Long tab, bearish ones the Short tab. Within a tab, a promotion
+// goes into whatever that tab actually SCANS — the active saved watchlist
+// when one is selected (a scan covers only that list), otherwise the
+// default list. Sending promotions to the default list while a saved
+// watchlist was active left them silently unscanned.
 const scopeFor = (direction: 'long' | 'short'): UniverseScope => direction;
 
-/** Adds the ticker to the matching tab's custom list and records provenance. */
-export function promoteTicker(ticker: string, direction: 'long' | 'short') {
-  addTicker(ticker, scopeFor(direction));
-  const list = getPromoted().filter((r) => !(r.ticker === ticker.toUpperCase() && r.direction === direction));
-  list.push({ ticker: ticker.toUpperCase(), promotedAt: new Date().toISOString(), direction });
+export interface PromotionTarget {
+  kind: 'watchlist' | 'default';
+  watchlistId?: string;
+  label: string; // "Nick's Tickers" or "default list"
+}
+
+export function promotionTarget(direction: 'long' | 'short'): PromotionTarget {
+  const scope = scopeFor(direction);
+  const id = getActiveWatchlistId(scope);
+  const wl = id ? getSavedWatchlists(scope).find((w) => w.id === id) : undefined;
+  return wl ? { kind: 'watchlist', watchlistId: wl.id, label: wl.name } : { kind: 'default', label: 'default list' };
+}
+
+function addToWatchlist(watchlistId: string, ticker: string, scope: UniverseScope) {
+  const wl = getSavedWatchlists(scope).find((w) => w.id === watchlistId);
+  if (!wl || wl.tickers.includes(ticker)) return;
+  updateWatchlist(watchlistId, { tickers: normalizeTickers([...wl.tickers, ticker]) }, scope);
+}
+
+function removeFromTarget(r: PromotedRecord) {
+  const scope = scopeFor(r.direction);
+  if (r.watchlistId) {
+    const wl = getSavedWatchlists(scope).find((w) => w.id === r.watchlistId);
+    if (wl) updateWatchlist(wl.id, { tickers: wl.tickers.filter((t) => t !== r.ticker) }, scope);
+    return;
+  }
+  removeTicker(r.ticker, scope);
+}
+
+/** Adds the ticker to what the matching tab scans and records provenance. */
+export function promoteTicker(ticker: string, direction: 'long' | 'short'): PromotionTarget {
+  const upper = ticker.toUpperCase();
+  const scope = scopeFor(direction);
+  const target = promotionTarget(direction);
+  if (target.kind === 'watchlist' && target.watchlistId) addToWatchlist(target.watchlistId, upper, scope);
+  else addTicker(upper, scope);
+  const list = getPromoted().filter((r) => !(r.ticker === upper && r.direction === direction));
+  list.push({ ticker: upper, promotedAt: new Date().toISOString(), direction, watchlistId: target.watchlistId });
   savePromoted(list);
+  return target;
 }
 
 export function demoteTicker(ticker: string, direction: 'long' | 'short') {
   const upper = ticker.toUpperCase();
-  removeTicker(upper, scopeFor(direction));
-  savePromoted(getPromoted().filter((r) => !(r.ticker === upper && r.direction === direction)));
+  const all = getPromoted();
+  for (const r of all.filter((x) => x.ticker === upper && x.direction === direction)) removeFromTarget(r);
+  savePromoted(all.filter((r) => !(r.ticker === upper && r.direction === direction)));
 }
 
 /** Removes every discovery-promoted ticker for one direction's tab. */
 export function demoteAll(direction: 'long' | 'short') {
   const all = getPromoted();
-  for (const r of all.filter((x) => x.direction === direction)) removeTicker(r.ticker, scopeFor(direction));
+  for (const r of all.filter((x) => x.direction === direction)) removeFromTarget(r);
   savePromoted(all.filter((x) => x.direction !== direction));
 }

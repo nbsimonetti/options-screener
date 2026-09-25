@@ -6,6 +6,7 @@ import {
   getUniverse, getWatchlist, addTicker, removeTicker, setWatchlist, getDefaultUniverse, resetToDefault,
   getExcluded, excludeTicker, includeTicker, clearExcluded, DEFAULT_UNIVERSE_SET, normalizeTickers,
   getSavedWatchlists, getActiveWatchlistId, setActiveWatchlistId, createWatchlist, updateWatchlist, deleteWatchlist,
+  mergeSavedDelta,
 } from '../services/universe';
 import type { UniverseScope } from '../services/universe';
 
@@ -13,6 +14,7 @@ export interface UniverseSelection {
   tickers: string[];      // what a scan will actually cover
   label: string;          // "Default universe" or the watchlist name
   mode: 'default' | 'watchlist';
+  savedId: string | null; // active saved watchlist; null for the default list or an unsaved draft
   dirty: boolean;         // unsaved watchlist edits
 }
 
@@ -56,11 +58,22 @@ export default function UniverseEditor({ scope, onChange, refreshKey = 0, collap
   const [formName, setFormName] = useState('');
   const [wlError, setWlError] = useState('');
 
-  // External edits (Discovery promotion) write straight to storage.
+  // External edits (Discovery promotion) write straight to storage — into
+  // the active saved watchlist when one is selected, otherwise the default
+  // list. Pull both back in, merging the watchlist change into the buffer.
   useEffect(() => {
     if (refreshKey === 0) return;
     setWatchlistState(getWatchlist(scope));
     setExcludedState(getExcluded(scope));
+    const nextSaved = getSavedWatchlists(scope);
+    if (mode === 'watchlist' && activeId !== null) {
+      const prev = savedWatchlists.find((w) => w.id === activeId)?.tickers ?? [];
+      const next = nextSaved.find((w) => w.id === activeId)?.tickers ?? prev;
+      setWorkingTickers((working) => mergeSavedDelta(working, prev, next));
+    }
+    setSavedWatchlists(nextSaved);
+    // Runs only on external-change signals; mode/activeId/savedWatchlists are read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey, scope]);
 
   const defaultTickers = getDefaultUniverse();
@@ -88,9 +101,9 @@ export default function UniverseEditor({ scope, onChange, refreshKey = 0, collap
   const label = mode === 'watchlist' ? (workingName || 'Untitled watchlist') : 'Default universe';
 
   useEffect(() => {
-    onChange({ tickers: effectiveUniverse, label, mode, dirty });
+    onChange({ tickers: effectiveUniverse, label, mode, savedId: mode === 'watchlist' ? activeId : null, dirty });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveUniverse, label, mode, dirty]);
+  }, [effectiveUniverse, label, mode, activeId, dirty]);
 
   // --- Default-universe ticker management ---
 

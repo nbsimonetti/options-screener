@@ -40,7 +40,7 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
   // Independent of the Short tab's universe (see universe.ts scopes).
   const [universeTick, setUniverseTick] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
-  const [selection, setSelection] = useState<UniverseSelection>({ tickers: [], label: 'Default universe', mode: 'default', dirty: false });
+  const [selection, setSelection] = useState<UniverseSelection>({ tickers: [], label: 'Default universe', mode: 'default', savedId: null, dirty: false });
   const universe = selection.tickers;
 
   const runScan = useCallback(async () => {
@@ -170,7 +170,11 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
         <UniverseEditor scope="long" onChange={setSelection} refreshKey={universeTick} collapsed={!showSettings} />
       </div>
 
-      <DiscoveryPanel direction="long" onUniverseChange={() => setUniverseTick((t) => t + 1)} />
+      <DiscoveryPanel
+        direction="long"
+        targetLabel={selection.mode === 'watchlist' && selection.savedId ? selection.label : 'default list'}
+        onUniverseChange={() => setUniverseTick((t) => t + 1)}
+      />
 
       {ideas.length > 0 && (
         <>

@@ -44,7 +44,9 @@ A market-cap floor (≥ $500M) was recommended but is not cleanly derivable from
 
 ## 5. Promotion flow
 
-"Add" on a discovery row (or "Promote top 10") calls `universe.ts#addTicker` — the ticker joins the default-universe custom watchlist that both scanners already read — and records provenance in `options-screener-promoted` (ticker, date, direction), so promoted tickers can be bulk-removed without touching manual entries. Promotion always targets the default universe; if a saved watchlist is active, add the ticker to it manually (deviation from the prompt's "respect watchlist mode," chosen to keep saved watchlists explicitly user-curated).
+"Add" on a discovery row (or "Promote top 10") adds the ticker to whatever the matching tab actually **scans**: bullish candidates go to the Long tab, bearish to the Short tab, and within that tab to the **active saved watchlist** when one is selected (a scan covers only that list), otherwise to the tab's default list. The panel states the destination ("adds go to \"Nick's Tickers\"") and each Add button's tooltip names it. Provenance lives in `options-screener-promoted` (ticker, date, direction, and the watchlist id when it went into a saved watchlist), so "Remove" and "Remove promoted" take a ticker out of exactly where it was put without touching manually curated entries. An open watchlist editor picks up promotions immediately; only the change is merged into its working copy, so unsaved edits survive.
+
+_The first version always sent promotions to the default list. While a saved watchlist was active, those tickers showed as promoted but were never scanned._
 
 **History for promoted tickers in production:** the artifact carries compact 300-bar OHLCV for shortlist members (`topBars`, ~50 tickers). `history.ts` falls back to these when a ticker is missing from `history-data.json`, so promoted tickers scan on the live site without the dev proxy. Tickers promoted long ago (no longer on the shortlist) age out of `topBars` — they then need the dev server or removal; the scanner's per-ticker skip message says which.
 

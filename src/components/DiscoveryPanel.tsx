@@ -6,6 +6,8 @@ import type { DiscoveryData, DiscoveryRow } from '../services/discovery';
 interface Props {
   direction: 'long' | 'short';
   onUniverseChange?: () => void; // lets the host tab refresh its universe count
+  /** Where promotions land: the active saved watchlist's name, or "default list". */
+  targetLabel?: string;
 }
 
 const FACTOR_LABELS: Record<string, string> = {
@@ -13,7 +15,8 @@ const FACTOR_LABELS: Record<string, string> = {
   vol: 'Volume', gap: 'Gap/PEAD', ext: 'Extension', rw: 'Rel Weakness', dist: 'Distribution', regime: 'Regime',
 };
 
-export default function DiscoveryPanel({ direction, onUniverseChange }: Props) {
+export default function DiscoveryPanel({ direction, onUniverseChange, targetLabel = 'default list' }: Props) {
+  const targetText = targetLabel === 'default list' ? 'the default list' : `"${targetLabel}"`;
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<DiscoveryData | null | 'loading'>('loading');
   const promotedFor = () => new Set(getPromoted().filter((r) => r.direction === direction).map((r) => r.ticker));
@@ -97,8 +100,9 @@ export default function DiscoveryPanel({ direction, onUniverseChange }: Props) {
               <div className="px-4 py-2 flex items-center gap-3 flex-wrap text-[10px] text-slate-500 border-b border-slate-700/60">
                 <span>Pool: {data.stats.scored} scored of {data.stats.poolSize} ({data.stats.lc} large · {data.stats.sc} small-cap)</span>
                 <span>· snapshot {snapshotAge}h old</span>
+                <span>· adds go to <span className="text-cyan-300">{targetText}</span></span>
                 <span className="ml-auto flex gap-2">
-                  <button onClick={promoteTop10} className="rounded bg-cyan-700/60 hover:bg-cyan-600/60 px-2 py-1 text-cyan-100 transition-colors">Promote top 10</button>
+                  <button onClick={promoteTop10} title={`Add the top 10 to ${targetText}`} className="rounded bg-cyan-700/60 hover:bg-cyan-600/60 px-2 py-1 text-cyan-100 transition-colors">Promote top 10</button>
                   {promoted.size > 0 && (
                     <button onClick={removeAllPromoted} className="rounded bg-slate-700 hover:bg-red-900/50 px-2 py-1 text-slate-300 hover:text-red-300 transition-colors flex items-center gap-1">
                       <Trash2 className="h-3 w-3" /> Remove promoted
@@ -143,6 +147,7 @@ export default function DiscoveryPanel({ direction, onUniverseChange }: Props) {
                           onToggle={() => setExpanded(isExpanded ? null : r.t)}
                           onPromote={() => handlePromote(r.t)}
                           onDemote={() => handleDemote(r.t)}
+                          targetText={targetText}
                         />
                       );
                     })}
@@ -151,8 +156,8 @@ export default function DiscoveryPanel({ direction, onUniverseChange }: Props) {
               )}
 
               <p className="px-4 py-2 text-[10px] text-slate-600 border-t border-slate-700/60">
-                Scored daily in CI with the same factor engine, zero API credits. Promoting adds the ticker to your scan
-                universe; the next Long/Short scan evaluates its options chain (~14–125 credits per ticker). Shortlist
+                Scored daily in CI with the same factor engine, zero API credits. Promoting adds the ticker to whatever this
+                tab scans — the active saved watchlist if one is selected, otherwise the default list; the next Long/Short scan evaluates its options chain (~14–125 credits per ticker). Shortlist
                 rules: within-bucket percentile ranking, small caps need ≥ 90th percentile, max 3 per sector, put-side
                 small caps face squeeze/exhaustion/liquidity guards.
               </p>
@@ -164,7 +169,7 @@ export default function DiscoveryPanel({ direction, onUniverseChange }: Props) {
   );
 }
 
-function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, onToggle, onPromote, onDemote }: {
+function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, onToggle, onPromote, onDemote, targetText }: {
   rank: number;
   row: DiscoveryRow;
   score: number;
@@ -175,6 +180,7 @@ function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, o
   onToggle: () => void;
   onPromote: () => void;
   onDemote: () => void;
+  targetText: string;
 }) {
   return (
     <>
@@ -195,11 +201,11 @@ function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, o
         <td className="px-2 py-1.5 text-center text-xs text-sky-300">{row.trig ?? <span className="text-slate-600">—</span>}</td>
         <td className="px-2 py-1.5 text-center">
           {isPromoted ? (
-            <button onClick={(e) => { e.stopPropagation(); onDemote(); }} title="In universe — click to remove" className="text-emerald-400 hover:text-red-400 transition-colors">
+            <button onClick={(e) => { e.stopPropagation(); onDemote(); }} title="Promoted — click to remove it from where it was added" className="text-emerald-400 hover:text-red-400 transition-colors">
               <Check className="h-4 w-4" />
             </button>
           ) : (
-            <button onClick={(e) => { e.stopPropagation(); onPromote(); }} title="Add to scan universe" className="text-slate-400 hover:text-cyan-300 transition-colors">
+            <button onClick={(e) => { e.stopPropagation(); onPromote(); }} title={`Add to ${targetText}`} className="text-slate-400 hover:text-cyan-300 transition-colors">
               <Plus className="h-4 w-4" />
             </button>
           )}
