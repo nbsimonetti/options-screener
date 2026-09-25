@@ -311,3 +311,28 @@ export async function getOptionQuote(optionSymbol: string, token?: string): Prom
     updated: data.updated[0] ?? 0,
   };
 }
+
+// --- Daily candles (history fallback for tickers outside the CI snapshot) ---
+// Billed at 1 credit per 1,000 candles, so ~2y of daily bars costs 1 credit.
+
+export interface MDCandles {
+  t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[];
+}
+
+interface MDCandlesResponse extends Partial<MDCandles> {
+  s: string;
+}
+
+export async function getDailyCandles(ticker: string, token?: string, countback = 520): Promise<MDCandles | null> {
+  const upper = ticker.toUpperCase();
+  const to = new Date().toISOString().slice(0, 10);
+  const data = await mdFetch<MDCandlesResponse>(
+    `/stocks/candles/D/${upper}/`,
+    { to, countback: String(countback) },
+    token,
+  );
+  const n = data.c?.length ?? 0;
+  tallyCredits(Math.max(1, Math.ceil(n / 1000)));
+  if (data.s !== 'ok' || !data.t || !data.c || n === 0) return null;
+  return { t: data.t, o: data.o ?? data.c, h: data.h ?? data.c, l: data.l ?? data.c, c: data.c, v: data.v ?? data.c.map(() => 0) };
+}

@@ -141,7 +141,28 @@ export function getCachedHistory(ticker: string): DailyBars | null {
   return entry.value;
 }
 
-export async function fetchHistory(ticker: string): Promise<DailyBars> {
+function cacheBars(bars: DailyBars): DailyBars {
+  const cache = readCache();
+  const entries = Object.entries(cache);
+  if (entries.length >= MAX_ENTRIES) {
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (const [k] of entries.slice(0, entries.length - MAX_ENTRIES + 1)) delete cache[k];
+  }
+  cache[bars.ticker] = { value: bars, timestamp: Date.now() };
+  writeCache(cache);
+  return bars;
+}
+
+/**
+ * Daily bars for any ticker. Production source order (cheapest first):
+ *   1. localStorage cache (~1 day)
+ *   2. CI snapshot history-data.json (default universe + sector ETFs, free)
+ *   3. discovery shortlist bars (free)
+ *   4. MarketData daily candles — 1 credit per ticker (billed per 1,000
+ *      candles), which is what makes custom watchlist tickers work on the
+ *      static build.
+ */
+export async function fetchHistory(ticker: string, marketDataToken?: string): Promise<DailyBars> {
   const upper = ticker.toUpperCase();
   const cached = getCachedHistory(upper);
   if (cached) return cached;
@@ -162,17 +183,32 @@ export async function fetchHistory(ticker: string): Promise<DailyBars> {
       // static build without the dev proxy.
       const { getDiscoveryBars } = await import('./discovery');
       const disc = getDiscoveryBars(upper);
-      if (disc) {
-        const cache2 = readCache();
-        cache2[upper] = { value: disc, timestamp: Date.now() };
-        writeCache(cache2);
-        return disc;
+      if (disc) return cacheBars(disc);
+
+      const { getDailyCandles } = await import('./marketdata');
+      let candles = null;
+      try {
+        candles = await getDailyCandles(upper, marketDataToken);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(
+          /401|403/.test(msg)
+            ? `${upper} is outside the free snapshot and needs 1 MarketData credit for history — add your token in Settings.`
+            : `${upper}: MarketData candles failed (${msg.substring(0, 80)})`,
+        );
       }
-      throw new HistoryUnavailableError(
-        `${upper} is not in the static history snapshot (default universe + sector ETFs + current discovery shortlist) — scan other custom tickers via the local dev server.`,
-      );
+      if (!candles) throw new Error(`${upper}: MarketData returned no daily candles (delisted or bad symbol?)`);
+      return cacheBars({
+        ticker: upper,
+        timestamps: candles.t,
+        opens: candles.o,
+        highs: candles.h,
+        lows: candles.l,
+        closes: candles.c,
+        volumes: candles.v,
+      });
     }
-    const bars: DailyBars = {
+    return cacheBars({
       ticker: upper,
       timestamps: compact.t,
       opens: compact.o,
@@ -180,11 +216,7 @@ export async function fetchHistory(ticker: string): Promise<DailyBars> {
       lows: compact.l,
       closes: compact.c,
       volumes: compact.v,
-    };
-    const cache = readCache();
-    cache[upper] = { value: bars, timestamp: Date.now() };
-    writeCache(cache);
-    return bars;
+    });
   }
 
   const url = `${YAHOO}${encodeURIComponent(upper)}?interval=1d&range=2y`;

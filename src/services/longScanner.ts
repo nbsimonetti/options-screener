@@ -1,6 +1,7 @@
 // Long call / long put idea scanner — the directional mirror of scanner.ts.
 // Pipeline per docs/LONG_STRATEGY_DESIGN.md:
-//   Yahoo history (free) → factor composites → only factor-qualified tickers
+//   daily history (free snapshot, or 1 MarketData credit for custom tickers)
+//   → factor composites → only factor-qualified tickers
 //   spend MarketData credits (quote + expirations + ONE chain side) → funnel
 //   stages 1–6 → contract selection → LongIdea.
 
@@ -146,7 +147,7 @@ export async function scanForLongIdeas(
   await verifyHistorySource();
   let spy: DailyBars | null;
   try {
-    spy = await fetchHistory('SPY');
+    spy = await fetchHistory('SPY', marketDataToken);
   } catch (e) {
     if (e instanceof HistoryUnavailableError) throw e;
     spy = null;
@@ -158,13 +159,13 @@ export async function scanForLongIdeas(
     emit({ current: i + 1, currentTicker: ticker, message: `Analyzing ${ticker} (${i + 1}/${total})` });
 
     try {
-      // --- Factor stage (free: Yahoo history only) ---
+      // --- Factor stage (history: free snapshot, ~1 credit for custom tickers) ---
       // Keep the REAL failure reason — "insufficient history" as a blanket
       // label hid a snapshot-fetch outage behind a misleading message.
       let bars: DailyBars | null = null;
       let histErr = '';
       try {
-        bars = await fetchHistory(ticker);
+        bars = await fetchHistory(ticker, marketDataToken);
       } catch (e) {
         histErr = e instanceof Error ? e.message.substring(0, 110) : 'history fetch failed';
       }
@@ -186,7 +187,7 @@ export async function scanForLongIdeas(
 
       const info = getSectorInfo(ticker);
       if (!sectorBars.has(info.etf)) {
-        sectorBars.set(info.etf, await fetchHistory(info.etf).catch(() => null));
+        sectorBars.set(info.etf, await fetchHistory(info.etf, marketDataToken).catch(() => null));
       }
       const sector = sectorBars.get(info.etf) ?? null;
 
