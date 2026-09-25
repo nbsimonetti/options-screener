@@ -16,7 +16,8 @@ const FACTOR_LABELS: Record<string, string> = {
 export default function DiscoveryPanel({ direction, onUniverseChange }: Props) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<DiscoveryData | null | 'loading'>('loading');
-  const [promoted, setPromoted] = useState(() => new Set(getPromoted().map((r) => r.ticker)));
+  const promotedFor = () => new Set(getPromoted().filter((r) => r.direction === direction).map((r) => r.ticker));
+  const [promoted, setPromoted] = useState(promotedFor);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [snapshotAge, setSnapshotAge] = useState<number | null>(null);
 
@@ -41,25 +42,25 @@ export default function DiscoveryPanel({ direction, onUniverseChange }: Props) {
 
   const handlePromote = (ticker: string) => {
     promoteTicker(ticker, direction);
-    setPromoted(new Set(getPromoted().map((r) => r.ticker)));
+    setPromoted(promotedFor());
     onUniverseChange?.();
   };
 
   const handleDemote = (ticker: string) => {
-    demoteTicker(ticker);
-    setPromoted(new Set(getPromoted().map((r) => r.ticker)));
+    demoteTicker(ticker, direction);
+    setPromoted(promotedFor());
     onUniverseChange?.();
   };
 
   const promoteTop10 = () => {
     for (const r of rows.slice(0, 10)) promoteTicker(r.t, direction);
-    setPromoted(new Set(getPromoted().map((r) => r.ticker)));
+    setPromoted(promotedFor());
     onUniverseChange?.();
   };
 
   const removeAllPromoted = () => {
-    if (!window.confirm('Remove ALL discovery-promoted tickers from the scan universe?')) return;
-    demoteAll();
+    if (!window.confirm(`Remove all discovery-promoted tickers from the ${direction === 'long' ? 'Long' : 'Short'} tab's universe?`)) return;
+    demoteAll(direction);
     setPromoted(new Set());
     onUniverseChange?.();
   };

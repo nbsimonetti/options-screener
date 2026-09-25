@@ -1,6 +1,42 @@
 import { LS_WATCHLIST, LS_EXCLUDED, LS_SAVED_WATCHLISTS, LS_ACTIVE_WATCHLIST } from '../types';
 import type { ScanFilter, SavedWatchlist } from '../types';
 
+// Each Idea Generator owns an independent scan universe: the short (income)
+// screener wants names with EXPENSIVE options, the long screener wants names
+// with CHEAP options, so their ticker lists diverge. 'short' keeps the
+// original storage keys (existing data untouched); 'long' has its own keys,
+// seeded once from the short lists so the split starts from what the user
+// already curated.
+export type UniverseScope = 'short' | 'long';
+
+const KEYS: Record<UniverseScope, { watchlist: string; excluded: string; saved: string; active: string }> = {
+  short: { watchlist: LS_WATCHLIST, excluded: LS_EXCLUDED, saved: LS_SAVED_WATCHLISTS, active: LS_ACTIVE_WATCHLIST },
+  long: {
+    watchlist: 'options-screener-long-watchlist',
+    excluded: 'options-screener-long-excluded',
+    saved: 'options-screener-long-saved-watchlists',
+    active: 'options-screener-long-active-watchlist',
+  },
+};
+const LONG_SEEDED_KEY = 'options-screener-long-universe-seeded';
+
+function keysFor(scope: UniverseScope) {
+  if (scope === 'long') seedLongUniverse();
+  return KEYS[scope];
+}
+
+/** One-time copy of the short universe into the long scope. */
+function seedLongUniverse() {
+  try {
+    if (localStorage.getItem(LONG_SEEDED_KEY)) return;
+    for (const k of ['watchlist', 'excluded'] as const) {
+      const v = localStorage.getItem(KEYS.short[k]);
+      if (v !== null && localStorage.getItem(KEYS.long[k]) === null) localStorage.setItem(KEYS.long[k], v);
+    }
+    localStorage.setItem(LONG_SEEDED_KEY, new Date().toISOString());
+  } catch { /* storage unavailable — scopes simply start empty */ }
+}
+
 const DEFAULT_UNIVERSE = [
   // Tech
   'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'INTC', 'CRM', 'ORCL', 'ADBE',
@@ -20,102 +56,102 @@ const DEFAULT_UNIVERSE = [
 
 export const DEFAULT_UNIVERSE_SET = new Set(DEFAULT_UNIVERSE);
 
-function loadWatchlist(): string[] {
+function loadWatchlist(scope: UniverseScope): string[] {
   try {
-    const stored = localStorage.getItem(LS_WATCHLIST);
+    const stored = localStorage.getItem(keysFor(scope).watchlist);
     return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
   }
 }
 
-function saveWatchlist(list: string[]) {
-  localStorage.setItem(LS_WATCHLIST, JSON.stringify(list));
+function saveWatchlist(list: string[], scope: UniverseScope) {
+  localStorage.setItem(keysFor(scope).watchlist, JSON.stringify(list));
 }
 
-function loadExcluded(): string[] {
+function loadExcluded(scope: UniverseScope): string[] {
   try {
-    const stored = localStorage.getItem(LS_EXCLUDED);
+    const stored = localStorage.getItem(keysFor(scope).excluded);
     return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
   }
 }
 
-function saveExcluded(list: string[]) {
-  localStorage.setItem(LS_EXCLUDED, JSON.stringify(list));
+function saveExcluded(list: string[], scope: UniverseScope) {
+  localStorage.setItem(keysFor(scope).excluded, JSON.stringify(list));
 }
 
-export function getUniverse(): string[] {
-  const custom = loadWatchlist();
-  const excluded = new Set(loadExcluded());
+export function getUniverse(scope: UniverseScope = 'short'): string[] {
+  const custom = loadWatchlist(scope);
+  const excluded = new Set(loadExcluded(scope));
   const combined = new Set([...DEFAULT_UNIVERSE, ...custom]);
   return [...combined].filter((t) => !excluded.has(t)).sort();
 }
 
-export function getWatchlist(): string[] {
-  return loadWatchlist();
+export function getWatchlist(scope: UniverseScope = 'short'): string[] {
+  return loadWatchlist(scope);
 }
 
 export function getDefaultUniverse(): string[] {
   return [...DEFAULT_UNIVERSE];
 }
 
-export function getExcluded(): string[] {
-  return loadExcluded();
+export function getExcluded(scope: UniverseScope = 'short'): string[] {
+  return loadExcluded(scope);
 }
 
-export function addTicker(ticker: string) {
+export function addTicker(ticker: string, scope: UniverseScope = 'short') {
   const upper = ticker.toUpperCase().trim();
   if (!upper) return;
 
   // If it's currently excluded, un-exclude it so the add takes effect
-  const excluded = loadExcluded();
+  const excluded = loadExcluded(scope);
   if (excluded.includes(upper)) {
-    saveExcluded(excluded.filter((t) => t !== upper));
+    saveExcluded(excluded.filter((t) => t !== upper), scope);
   }
 
   // Only add to watchlist if it's not already a default and not already in the watchlist
   if (DEFAULT_UNIVERSE_SET.has(upper)) return;
-  const list = loadWatchlist();
+  const list = loadWatchlist(scope);
   if (list.includes(upper)) return;
   list.push(upper);
   list.sort();
-  saveWatchlist(list);
+  saveWatchlist(list, scope);
 }
 
-export function removeTicker(ticker: string) {
-  const list = loadWatchlist().filter((t) => t !== ticker.toUpperCase());
-  saveWatchlist(list);
+export function removeTicker(ticker: string, scope: UniverseScope = 'short') {
+  const list = loadWatchlist(scope).filter((t) => t !== ticker.toUpperCase());
+  saveWatchlist(list, scope);
 }
 
-export function excludeTicker(ticker: string) {
+export function excludeTicker(ticker: string, scope: UniverseScope = 'short') {
   const upper = ticker.toUpperCase().trim();
   if (!upper) return;
-  const excluded = loadExcluded();
+  const excluded = loadExcluded(scope);
   if (excluded.includes(upper)) return;
   excluded.push(upper);
   excluded.sort();
-  saveExcluded(excluded);
+  saveExcluded(excluded, scope);
 }
 
-export function includeTicker(ticker: string) {
+export function includeTicker(ticker: string, scope: UniverseScope = 'short') {
   const upper = ticker.toUpperCase().trim();
-  const excluded = loadExcluded().filter((t) => t !== upper);
-  saveExcluded(excluded);
+  const excluded = loadExcluded(scope).filter((t) => t !== upper);
+  saveExcluded(excluded, scope);
 }
 
-export function clearExcluded() {
-  saveExcluded([]);
+export function clearExcluded(scope: UniverseScope = 'short') {
+  saveExcluded([], scope);
 }
 
-export function setWatchlist(tickers: string[]) {
-  saveWatchlist(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean));
+export function setWatchlist(tickers: string[], scope: UniverseScope = 'short') {
+  saveWatchlist(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean), scope);
 }
 
-export function resetToDefault() {
-  saveWatchlist([]);
-  saveExcluded([]);
+export function resetToDefault(scope: UniverseScope = 'short') {
+  saveWatchlist([], scope);
+  saveExcluded([], scope);
 }
 
 // --- Saved Watchlists ---
@@ -130,17 +166,17 @@ export function normalizeTickers(tickers: string[]): string[] {
   return [...seen].sort();
 }
 
-function loadSavedWatchlists(): SavedWatchlist[] {
+function loadSavedWatchlists(scope: UniverseScope): SavedWatchlist[] {
   try {
-    const stored = localStorage.getItem(LS_SAVED_WATCHLISTS);
+    const stored = localStorage.getItem(keysFor(scope).saved);
     return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
   }
 }
 
-function persistSavedWatchlists(list: SavedWatchlist[]) {
-  localStorage.setItem(LS_SAVED_WATCHLISTS, JSON.stringify(list));
+function persistSavedWatchlists(list: SavedWatchlist[], scope: UniverseScope) {
+  localStorage.setItem(keysFor(scope).saved, JSON.stringify(list));
 }
 
 function nameTaken(list: SavedWatchlist[], name: string, exceptId?: string): boolean {
@@ -148,34 +184,34 @@ function nameTaken(list: SavedWatchlist[], name: string, exceptId?: string): boo
   return list.some((w) => w.id !== exceptId && w.name.trim().toLowerCase() === n);
 }
 
-export function getSavedWatchlists(): SavedWatchlist[] {
-  return loadSavedWatchlists();
+export function getSavedWatchlists(scope: UniverseScope = 'short'): SavedWatchlist[] {
+  return loadSavedWatchlists(scope);
 }
 
-export function getActiveWatchlistId(): string | null {
+export function getActiveWatchlistId(scope: UniverseScope = 'short'): string | null {
   try {
-    const stored = localStorage.getItem(LS_ACTIVE_WATCHLIST);
+    const stored = localStorage.getItem(keysFor(scope).active);
     return stored ? JSON.parse(stored) : null;
   } catch {
     return null;
   }
 }
 
-export function setActiveWatchlistId(id: string | null) {
-  localStorage.setItem(LS_ACTIVE_WATCHLIST, JSON.stringify(id));
+export function setActiveWatchlistId(id: string | null, scope: UniverseScope = 'short') {
+  localStorage.setItem(keysFor(scope).active, JSON.stringify(id));
 }
 
-export function getActiveWatchlist(): SavedWatchlist | null {
-  const id = getActiveWatchlistId();
+export function getActiveWatchlist(scope: UniverseScope = 'short'): SavedWatchlist | null {
+  const id = getActiveWatchlistId(scope);
   if (!id) return null;
-  return loadSavedWatchlists().find((w) => w.id === id) ?? null;
+  return loadSavedWatchlists(scope).find((w) => w.id === id) ?? null;
 }
 
 /** Create and persist a new named watchlist. Throws on empty or duplicate name. */
-export function createWatchlist(name: string, tickers: string[], filters: ScanFilter): SavedWatchlist {
+export function createWatchlist(name: string, tickers: string[], filters: ScanFilter, scope: UniverseScope = 'short'): SavedWatchlist {
   const trimmed = name.trim();
   if (!trimmed) throw new Error('Watchlist name cannot be empty.');
-  const list = loadSavedWatchlists();
+  const list = loadSavedWatchlists(scope);
   if (nameTaken(list, trimmed)) throw new Error(`A watchlist named "${trimmed}" already exists.`);
   const now = new Date().toISOString();
   const watchlist: SavedWatchlist = {
@@ -186,7 +222,7 @@ export function createWatchlist(name: string, tickers: string[], filters: ScanFi
     createdAt: now,
     updatedAt: now,
   };
-  persistSavedWatchlists([...list, watchlist]);
+  persistSavedWatchlists([...list, watchlist], scope);
   return watchlist;
 }
 
@@ -194,8 +230,9 @@ export function createWatchlist(name: string, tickers: string[], filters: ScanFi
 export function updateWatchlist(
   id: string,
   patch: Partial<Pick<SavedWatchlist, 'name' | 'tickers' | 'filters'>>,
+  scope: UniverseScope = 'short',
 ): SavedWatchlist {
-  const list = loadSavedWatchlists();
+  const list = loadSavedWatchlists(scope);
   const idx = list.findIndex((w) => w.id === id);
   if (idx === -1) throw new Error('Watchlist not found.');
 
@@ -212,12 +249,12 @@ export function updateWatchlist(
 
   const copy = [...list];
   copy[idx] = next;
-  persistSavedWatchlists(copy);
+  persistSavedWatchlists(copy, scope);
   return next;
 }
 
 /** Delete a watchlist. If it was the active one, fall back to the default universe. */
-export function deleteWatchlist(id: string) {
-  persistSavedWatchlists(loadSavedWatchlists().filter((w) => w.id !== id));
-  if (getActiveWatchlistId() === id) setActiveWatchlistId(null);
+export function deleteWatchlist(id: string, scope: UniverseScope = 'short') {
+  persistSavedWatchlists(loadSavedWatchlists(scope).filter((w) => w.id !== id), scope);
+  if (getActiveWatchlistId(scope) === id) setActiveWatchlistId(null, scope);
 }

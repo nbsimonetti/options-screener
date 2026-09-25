@@ -8,6 +8,7 @@
 // generate a local test pool (it lands in public/, which Vite serves).
 
 import { addTicker, removeTicker } from './universe';
+import type { UniverseScope } from './universe';
 import type { DailyBars } from './history';
 
 export interface DiscoveryRow {
@@ -96,20 +97,27 @@ function savePromoted(list: PromotedRecord[]) {
   } catch { /* ignore */ }
 }
 
-/** Adds the ticker to the default-universe custom watchlist and records provenance. */
+// Each Idea Generator has its own universe: bullish discovery candidates
+// feed the Long tab, bearish ones the Short tab.
+const scopeFor = (direction: 'long' | 'short'): UniverseScope => direction;
+
+/** Adds the ticker to the matching tab's custom list and records provenance. */
 export function promoteTicker(ticker: string, direction: 'long' | 'short') {
-  addTicker(ticker);
-  const list = getPromoted().filter((r) => r.ticker !== ticker.toUpperCase());
+  addTicker(ticker, scopeFor(direction));
+  const list = getPromoted().filter((r) => !(r.ticker === ticker.toUpperCase() && r.direction === direction));
   list.push({ ticker: ticker.toUpperCase(), promotedAt: new Date().toISOString(), direction });
   savePromoted(list);
 }
 
-export function demoteTicker(ticker: string) {
-  removeTicker(ticker);
-  savePromoted(getPromoted().filter((r) => r.ticker !== ticker.toUpperCase()));
+export function demoteTicker(ticker: string, direction: 'long' | 'short') {
+  const upper = ticker.toUpperCase();
+  removeTicker(upper, scopeFor(direction));
+  savePromoted(getPromoted().filter((r) => !(r.ticker === upper && r.direction === direction)));
 }
 
-export function demoteAll() {
-  for (const r of getPromoted()) removeTicker(r.ticker);
-  savePromoted([]);
+/** Removes every discovery-promoted ticker for one direction's tab. */
+export function demoteAll(direction: 'long' | 'short') {
+  const all = getPromoted();
+  for (const r of all.filter((x) => x.direction === direction)) removeTicker(r.ticker, scopeFor(direction));
+  savePromoted(all.filter((x) => x.direction !== direction));
 }

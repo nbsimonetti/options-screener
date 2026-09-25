@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
-import { TrendingUp, TrendingDown, Loader2, Rocket, Info, ChevronDown, ChevronRight, AlertTriangle, X } from 'lucide-react';
+import { TrendingUp, TrendingDown, Loader2, Rocket, Info, ChevronDown, ChevronRight, AlertTriangle, X, Settings } from 'lucide-react';
 import type { APIConfig, LongIdea, ScanProgress } from '../types';
-import { getUniverse } from '../services/universe';
 import { scanForLongIdeas, DEFAULT_LONG_SCAN_CREDITS } from '../services/longScanner';
 import { historySource, getHistorySnapshotAge } from '../services/history';
 import { allocateBudget } from '../services/creditLedger';
@@ -9,6 +8,8 @@ import { loadPortfolio } from '../services/paperEngine';
 import { getCreditCount } from '../services/marketdata';
 import { formatCurrency } from '../utils/formatting';
 import DiscoveryPanel from './DiscoveryPanel';
+import UniverseEditor from './UniverseEditor';
+import type { UniverseSelection } from './UniverseEditor';
 
 interface Props {
   apiConfig: APIConfig;
@@ -36,9 +37,11 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
   const [showSkips, setShowSkips] = useState(false);
   const [skips, setSkips] = useState<string[]>([]);
 
+  // Independent of the Short tab's universe (see universe.ts scopes).
   const [universeTick, setUniverseTick] = useState(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const universe = useMemo(() => getUniverse(), [universeTick]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [selection, setSelection] = useState<UniverseSelection>({ tickers: [], label: 'Default universe', mode: 'default', dirty: false });
+  const universe = selection.tickers;
 
   const runScan = useCallback(async () => {
     setError('');
@@ -47,6 +50,10 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
     try {
       const alloc = allocateBudget(loadPortfolio().positions.length);
       const budget = Math.min(DEFAULT_LONG_SCAN_CREDITS, alloc.scanAvailable);
+      if (universe.length === 0) {
+        setError(selection.mode === 'watchlist' ? 'This watchlist has no tickers. Add some before scanning.' : 'No tickers to scan. Add some or restore the defaults.');
+        return;
+      }
       setProgress({ phase: 'fetching', current: 0, total: universe.length, currentTicker: '', message: 'Starting long scan...', requestsUsed: 0, requestBudget: budget });
       const result = await scanForLongIdeas(universe, setProgress, apiConfig.marketDataToken || undefined, budget);
       onIdeasChange(result.ideas);
@@ -75,7 +82,7 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
       setError(msg);
       setProgress({ phase: 'error', current: 0, total: 0, currentTicker: '', message: msg, requestsUsed: getCreditCount(), requestBudget: DEFAULT_LONG_SCAN_CREDITS });
     }
-  }, [universe, apiConfig, onIdeasChange]);
+  }, [universe, selection.mode, apiConfig, onIdeasChange]);
 
   const isScanning = progress.phase === 'fetching' || progress.phase === 'scoring';
   const progressPct = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
@@ -98,8 +105,19 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
             {isScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
             {isScanning ? 'Scanning...' : 'Generate Long Ideas'}
           </button>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className={`rounded px-3 py-2 text-sm border transition-colors ${showSettings ? 'bg-slate-700 border-sky-500 text-sky-400' : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'}`}
+            title="Edit the Long tab's scan universe"
+            aria-label="Scan universe settings"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
           <span className="ml-auto text-xs text-slate-500">
-            {universe.length} tickers &middot; buys calls/puts when vol is cheap and direction is evidenced
+            {universe.length} tickers &middot;{' '}
+            <span className={selection.mode === 'watchlist' ? 'text-emerald-400' : ''}>{selection.label}</span>
+            {selection.dirty && <span className="text-amber-400"> &bull;</span>}
+            {' '}&middot; buys calls/puts when vol is cheap and direction is evidenced
           </span>
         </div>
 
@@ -146,6 +164,10 @@ export default function LongIdeaGenerator({ apiConfig, ideas, onIdeasChange }: P
             )}
           </div>
         )}
+      </div>
+
+      <div className={showSettings ? 'rounded-lg border border-slate-700 bg-slate-800/50 p-4' : ''}>
+        <UniverseEditor scope="long" onChange={setSelection} refreshKey={universeTick} collapsed={!showSettings} />
       </div>
 
       <DiscoveryPanel direction="long" onUniverseChange={() => setUniverseTick((t) => t + 1)} />
