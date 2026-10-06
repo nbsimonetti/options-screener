@@ -18,6 +18,10 @@ const FACTOR_LABELS: Record<string, string> = {
 export default function DiscoveryPanel({ direction, onUniverseChange, targetLabel = 'default list' }: Props) {
   const targetText = targetLabel === 'default list' ? 'the default list' : `"${targetLabel}"`;
   const [open, setOpen] = useState(false);
+  // Short tab (selling premium) gets CSP candidates; Long tab toggles
+  // between bullish (calls) and bearish (puts) directional picks.
+  const [longList, setLongList] = useState<'bull' | 'bear'>('bull');
+  const list: 'bull' | 'bear' | 'csp' = direction === 'short' ? 'csp' : longList;
   const [data, setData] = useState<DiscoveryData | null | 'loading'>('loading');
   const promotedFor = () => new Set(getPromoted().filter((r) => r.direction === direction).map((r) => r.ticker));
   const [promoted, setPromoted] = useState(promotedFor);
@@ -35,13 +39,13 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
 
   const rows: DiscoveryRow[] = useMemo(() => {
     if (!data || data === 'loading') return [];
-    const shortlist = direction === 'long' ? data.topLong : data.topShort;
+    const shortlist = list === 'bull' ? data.topLong : list === 'bear' ? data.topShort : (data.topCsp ?? []);
     const byTicker = new Map(data.scored.map((r) => [r.t, r]));
     return shortlist.map((t) => byTicker.get(t)).filter((r): r is DiscoveryRow => !!r);
-  }, [data, direction]);
+  }, [data, list]);
 
-  const scoreKey = direction === 'long' ? 'bull' : 'bear';
-  const pctKey = direction === 'long' ? 'bullP' : 'bearP';
+  const scoreKey = list;
+  const pctKey = `${list}P` as 'bullP' | 'bearP' | 'cspP';
 
   const handlePromote = (ticker: string) => {
     promoteTicker(ticker, direction);
@@ -73,7 +77,9 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
       <button onClick={() => setOpen(!open)} className="w-full px-4 py-2.5 flex items-center gap-2 text-left hover:bg-slate-700/20 transition-colors">
         <Telescope className="h-4 w-4 text-cyan-400" />
         <h3 className="text-sm font-semibold text-white">
-          Discovery — top {direction === 'long' ? 'bullish' : 'bearish'} candidates beyond your watchlist
+          Discovery — {list === 'csp'
+            ? 'high-volatility names in uptrends (CSP candidates)'
+            : `top ${list === 'bull' ? 'bullish (calls)' : 'bearish (puts)'} candidates`} beyond your watchlist
         </h3>
         <span className="ml-auto flex items-center gap-3">
           {promoted.size > 0 && <span className="text-[10px] text-cyan-400">{promoted.size} promoted</span>}
@@ -98,6 +104,19 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
           {data && data !== 'loading' && (
             <>
               <div className="px-4 py-2 flex items-center gap-3 flex-wrap text-[10px] text-slate-500 border-b border-slate-700/60">
+                {direction === 'long' && (
+                  <span className="flex gap-1">
+                    {(['bull', 'bear'] as const).map((k) => (
+                      <button
+                        key={k}
+                        onClick={() => setLongList(k)}
+                        className={`rounded px-2 py-0.5 ${longList === k ? 'bg-cyan-700/60 text-cyan-100' : 'bg-slate-700 text-slate-300 hover:text-white'}`}
+                      >
+                        {k === 'bull' ? 'Bullish (calls)' : 'Bearish (puts)'}
+                      </button>
+                    ))}
+                  </span>
+                )}
                 <span>Pool: {data.stats.scored} scored of {data.stats.poolSize} ({data.stats.lc} large · {data.stats.sc} small-cap)</span>
                 <span>· snapshot {snapshotAge}h old</span>
                 <span>· adds go to <span className="text-cyan-300">{targetText}</span></span>
@@ -112,7 +131,11 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
               </div>
 
               {rows.length === 0 ? (
-                <p className="p-4 text-xs text-slate-500">No {direction} candidates cleared the discovery funnel today.</p>
+                <p className="p-4 text-xs text-slate-500">
+                  {list === 'csp' && !data.topCsp
+                    ? 'CSP candidates arrive with the next daily discovery refresh.'
+                    : 'No candidates cleared the discovery funnel today.'}
+                </p>
               ) : (
                 <table className="w-full text-sm">
                   <thead className="bg-slate-800 border-b border-slate-700 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
@@ -123,6 +146,7 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
                       <th className="px-2 py-1.5 text-left">Sector</th>
                       <th className="px-2 py-1.5 text-right">Price</th>
                       <th className="px-2 py-1.5 text-right" title="20d average dollar volume">ADV</th>
+                      <th className="px-2 py-1.5 text-right" title="20-day realized volatility — the free stand-in for option richness until an options scan checks actual IV">HV</th>
                       <th className="px-2 py-1.5 text-right" title="Factor composite (IV-quality excluded — unknown until an options scan)">Score</th>
                       <th className="px-2 py-1.5 text-right" title="Percentile within its own cap bucket">Pctile</th>
                       <th className="px-2 py-1.5 text-center">Trigger</th>
@@ -132,15 +156,15 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
                   <tbody>
                     {rows.map((r, i) => {
                       const isPromoted = promoted.has(r.t);
-                      const factors = direction === 'long' ? r.bf : r.sf;
+                      const factors = list === 'bear' ? r.sf : r.bf;
                       const isExpanded = expanded === r.t;
                       return (
                         <FragmentRow
                           key={r.t}
                           rank={i + 1}
                           row={r}
-                          score={r[scoreKey as 'bull' | 'bear']}
-                          pct={r[pctKey as 'bullP' | 'bearP']}
+                          score={r[scoreKey] ?? 0}
+                          pct={r[pctKey]}
                           factors={factors}
                           isPromoted={isPromoted}
                           isExpanded={isExpanded}
@@ -196,6 +220,7 @@ function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, o
         <td className="px-2 py-1.5 text-xs text-slate-400">{row.sec}</td>
         <td className="px-2 py-1.5 text-right text-xs font-mono text-slate-300">${row.p.toFixed(2)}</td>
         <td className="px-2 py-1.5 text-right text-xs font-mono text-slate-400">${row.adv}M</td>
+        <td className="px-2 py-1.5 text-right text-xs font-mono text-slate-400">{row.hv != null ? `${row.hv}%` : '—'}</td>
         <td className="px-2 py-1.5 text-right text-xs font-mono text-white">{score.toFixed(0)}</td>
         <td className="px-2 py-1.5 text-right text-xs font-mono text-slate-300">{pct ?? '—'}</td>
         <td className="px-2 py-1.5 text-center text-xs text-sky-300">{row.trig ?? <span className="text-slate-600">—</span>}</td>
@@ -213,7 +238,7 @@ function FragmentRow({ rank, row, score, pct, factors, isPromoted, isExpanded, o
       </tr>
       {isExpanded && (
         <tr className="border-b border-slate-700/50">
-          <td colSpan={10} className="px-4 py-2 bg-slate-900/50">
+          <td colSpan={11} className="px-4 py-2 bg-slate-900/50">
             {(row.n || row.d || row.ind) && (
               <div className="mb-1.5 text-xs">
                 <span className="font-semibold text-white">{row.n || row.t}</span>

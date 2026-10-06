@@ -32,6 +32,16 @@ export interface OptionPosition {
   // next expiration's by > 8 vol pts (almost always earnings). undefined =
   // insufficient data to tell.
   eventKink?: boolean;
+  // Quality shortfalls that no longer remove a contract but are surfaced on
+  // the idea (and keep the paper engine from entering it).
+  warnings?: PositionWarning[];
+}
+
+export type PositionWarningCode = 'trend' | 'wide-spread' | 'outside-dte';
+
+export interface PositionWarning {
+  code: PositionWarningCode;
+  text: string;
 }
 
 export interface ScoringWeights {

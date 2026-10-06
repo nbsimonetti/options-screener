@@ -358,6 +358,12 @@ export async function runTradingCycle(
         .filter((i) => new Date(i.generatedAt).getTime() >= freshCutoff)
         .filter((i) => i.score.compositeScore >= 60)
         .filter((i) => !heldUnderlyings.has(canonicalUnderlying(i.position.ticker)))
+        // The screener shows bearish-structure and wide-spread CSPs with
+        // warnings; the paper book still doesn't trade them (assignment
+        // risk, and a mid fill on a wide market overstates the credit).
+        .filter((i) => !(i.position.warnings ?? []).some((w) => w.code === 'trend' || w.code === 'wide-spread'))
+        // Leave room before the 21-DTE management exit, or it closes next cycle.
+        .filter((i) => dteOf(i.position.expirationDate) >= 28)
         .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
       const cand = cspCandidates[0];

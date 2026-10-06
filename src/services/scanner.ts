@@ -1,4 +1,4 @@
-import type { OptionPosition, ScoringWeights, ScanProgress, ScanFilter } from '../types';
+import type { OptionPosition, ScoringWeights, ScanProgress, ScanFilter, PositionWarning } from '../types';
 import type { PositionScore } from '../types';
 import { DEFAULT_SCAN_FILTER } from '../types';
 import {
@@ -7,7 +7,7 @@ import {
   setCreditCategory,
 } from './marketdata';
 import type { MDOption } from './marketdata';
-import { filterMDChain, mdChainToPositions } from './adapter';
+import { filterMDChain, mdChainToPositions, spreadWarning } from './adapter';
 import { resolveIVRank, getCachedIVData, setCachedIVRank } from './ivRank';
 import { hasQuoteCached, hasChainCached, chainCacheKey, getCachedExpirations } from './marketdataCache';
 import { getRemainingCredits } from './creditLedger';
@@ -25,7 +25,8 @@ export interface ScanResult {
   bestCCByTicker: ScanCandidate[];
   degradedToCacheOnly: boolean;
   creditsUsed: number;
-  vetoedTickers: string[];
+  trendWarned: string[];     // CSPs scored down for bearish structure
+  outsideWindow: string[];   // tickers scanned on a fallback expiration
 }
 
 const SCAN_DELAY_MS = 700;
@@ -61,6 +62,22 @@ function pickExpirations(expirations: string[], minDTE: number, maxDTE: number):
   return selected;
 }
 
+// Fallback when no expiration falls inside the user's DTE window (common
+// for monthly-only names when a narrow window sits between monthlies):
+// the expiration nearest the window, never shorter than 14 DTE
+// (gamma-heavy, and the 21-DTE management rule would close it at once).
+const FALLBACK_MIN_DTE = 14;
+function nearestOutsideWindow(expirations: string[], minDTE: number, maxDTE: number): string | null {
+  const distance = (d: number) => (d < minDTE ? minDTE - d : d - maxDTE);
+  const candidates = expirations
+    .map((exp) => ({ exp, dte: dteFromDate(exp) }))
+    .filter(({ dte }) => dte >= FALLBACK_MIN_DTE && (dte < minDTE || dte > maxDTE))
+    .sort((a, b) => distance(a.dte) - distance(b.dte) || b.dte - a.dte);
+  return candidates[0]?.exp ?? null;
+}
+
+const TREND_PENALTY = 10;
+
 export async function scanForIdeas(
   universe: string[],
   weights: ScoringWeights,
@@ -77,7 +94,8 @@ export async function scanForIdeas(
   const scanCredits = Math.max(0, Math.min(creditBudget ?? DEFAULT_SCAN_CREDITS, getRemainingCredits()));
   let cacheOnly = scanCredits === 0;
   const all: ScanCandidate[] = [];
-  const vetoedTickers: string[] = [];
+  const trendWarned: string[] = [];
+  const outsideWindow: string[] = [];
   const total = universe.length;
   const midpointDTE = (scanFilter.minDTE + scanFilter.maxDTE) / 2;
 
@@ -105,9 +123,13 @@ export async function scanForIdeas(
 
     // CSP trend veto (research finding: pure-IVR ranking adversely selects
     // breaking-down names). Only applies when cached history exists.
+    // Bearish structure (below 200d SMA / unreclaimed gap-down) used to veto
+    // the CSP outright; it now scores the CSP down and flags it, so the
+    // ticker still shows its best put with the risk stated.
     const veto = bearishStructureVeto(ticker);
-    const cspVetoed = veto?.vetoed === true;
-    if (cspVetoed) vetoedTickers.push(`${ticker} (${veto!.reason})`);
+    const trendWarning: PositionWarning | null = veto?.vetoed
+      ? { code: 'trend', text: `Bearish structure: ${veto.reason} — the puts most likely to be assigned (score −${TREND_PENALTY})` }
+      : null;
 
     emit({
       phase: 'fetching',
@@ -146,8 +168,25 @@ export async function scanForIdeas(
       if (creditsThisTicker() >= MAX_CREDITS_PER_TICKER) continue;
 
       const expirations = await getExpirations(ticker, marketDataToken);
-      const selectedExps = pickExpirations(expirations, scanFilter.minDTE, scanFilter.maxDTE);
-      if (selectedExps.length === 0) continue;
+      let selectedExps = pickExpirations(expirations, scanFilter.minDTE, scanFilter.maxDTE);
+      // DTE bounds actually applied to this ticker's contracts (widened to
+      // admit a fallback expiration; ±1 absorbs chain-vs-calendar rounding).
+      let dteMin = scanFilter.minDTE;
+      let dteMax = scanFilter.maxDTE;
+      let dteWarning: PositionWarning | null = null;
+      if (selectedExps.length === 0) {
+        const fallback = nearestOutsideWindow(expirations, scanFilter.minDTE, scanFilter.maxDTE);
+        if (!fallback) continue;
+        const d = dteFromDate(fallback);
+        selectedExps = [fallback];
+        dteMin = Math.min(dteMin, d - 1);
+        dteMax = Math.max(dteMax, d + 1);
+        dteWarning = {
+          code: 'outside-dte',
+          text: `No expiration inside your ${scanFilter.minDTE}–${scanFilter.maxDTE} day window — using the nearest one (${d} DTE)`,
+        };
+        outsideWindow.push(`${ticker} (${d} DTE)`);
+      }
       if (creditsThisTicker() >= MAX_CREDITS_PER_TICKER) continue;
 
       // Bound the chain fetches to what fits in the per-ticker credit budget
@@ -222,32 +261,37 @@ export async function scanForIdeas(
         eventKink = expIVs[0].iv - expIVs[1].iv > 0.08;
       }
 
+      const withWarnings = (pos: OptionPosition, extra: (PositionWarning | null)[]): OptionPosition => {
+        const warnings = [...extra, spreadWarning(pos.bid, pos.ask)].filter((w): w is PositionWarning => !!w);
+        return { ...pos, eventKink, ...(warnings.length ? { warnings } : {}) };
+      };
+
       const tickerCandidates: ScanCandidate[] = [];
       for (const { puts, calls } of chainsByExp) {
         if (puts.length === 0 && calls.length === 0) continue;
 
-        if (!cspVetoed) {
-          const cspFiltered = filterMDChain(puts, quote, {
-            strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40,
-            minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
-            minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
-          });
-          const cspPositions = mdChainToPositions(cspFiltered, quote, 'CSP', ivRank, '', atmIV, medianIV)
-            .map((pos) => ({ ...pos, eventKink }));
-          const cspScored = cspPositions
-            .map((pos) => ({ position: pos, score: scorePosition(pos, weights) }))
-            .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
-          if (cspScored[0]) tickerCandidates.push(cspScored[0]);
-        }
+        const cspFiltered = filterMDChain(puts, quote, {
+          strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40,
+          minDTE: dteMin, maxDTE: dteMax,
+          minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
+        });
+        const cspScored = mdChainToPositions(cspFiltered, quote, 'CSP', ivRank, '', atmIV, medianIV)
+          .map((pos) => withWarnings(pos, [dteWarning, trendWarning]))
+          .map((pos) => {
+            const score = scorePosition(pos, weights);
+            if (trendWarning) score.compositeScore = Math.max(0, score.compositeScore - TREND_PENALTY);
+            return { position: pos, score };
+          })
+          .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
+        if (cspScored[0]) tickerCandidates.push(cspScored[0]);
 
         const ccFiltered = filterMDChain(calls, quote, {
           strategy: 'CC', minDelta: 0.10, maxDelta: 0.40,
-          minDTE: scanFilter.minDTE, maxDTE: scanFilter.maxDTE,
+          minDTE: dteMin, maxDTE: dteMax,
           minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
         });
-        const ccPositions = mdChainToPositions(ccFiltered, quote, 'CC', ivRank, '', atmIV, medianIV)
-          .map((pos) => ({ ...pos, eventKink }));
-        const ccScored = ccPositions
+        const ccScored = mdChainToPositions(ccFiltered, quote, 'CC', ivRank, '', atmIV, medianIV)
+          .map((pos) => withWarnings(pos, [dteWarning]))
           .map((pos) => ({ position: pos, score: scorePosition(pos, weights) }))
           .sort((a, b) => b.score.compositeScore - a.score.compositeScore);
         if (ccScored[0]) tickerCandidates.push(ccScored[0]);
@@ -265,6 +309,7 @@ export async function scanForIdeas(
         .filter((c) => c.position.strategy === 'CC')
         .sort((a, b) => b.score.compositeScore - a.score.compositeScore)[0];
       if (bestCSP) all.push(bestCSP);
+      if (bestCSP && trendWarning) trendWarned.push(`${ticker} (${veto!.reason})`);
       if (bestCC) all.push(bestCC);
     } catch (e) {
       if (e instanceof BudgetExceededError) {
@@ -294,7 +339,8 @@ export async function scanForIdeas(
     creditsUsed: getCreditCount(),
     creditBudget: scanCredits,
     degradedToCacheOnly: cacheOnly,
-    cspTrendVetoes: vetoedTickers,
+    cspTrendWarnings: trendWarned,
+    fallbackExpirations: outsideWindow,
   });
 
   // Sort the full candidate pool once by composite score
@@ -344,6 +390,7 @@ export async function scanForIdeas(
     bestCCByTicker: [...bestCCByTicker.values()].sort((a, b) => b.score.compositeScore - a.score.compositeScore),
     degradedToCacheOnly: cacheOnly,
     creditsUsed: getCreditCount(),
-    vetoedTickers,
+    trendWarned,
+    outsideWindow,
   };
 }

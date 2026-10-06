@@ -197,8 +197,12 @@ export default function IdeaGenerator({ apiConfig, weights, ideas, onIdeasChange
       if (scanResult.degradedToCacheOnly) {
         notices.push('Credit budget ran low during this scan — some tickers were served from cache or skipped.');
       }
-      if (scanResult.vetoedTickers.length > 0) {
-        notices.push(`CSP trend veto excluded ${scanResult.vetoedTickers.length} ticker${scanResult.vetoedTickers.length > 1 ? 's' : ''} with bearish structure: ${scanResult.vetoedTickers.slice(0, 4).join('; ')}${scanResult.vetoedTickers.length > 4 ? '…' : ''}`);
+      const listSome = (xs: string[]) => `${xs.slice(0, 4).join('; ')}${xs.length > 4 ? '…' : ''}`;
+      if (scanResult.outsideWindow.length > 0) {
+        notices.push(`${scanResult.outsideWindow.length} ticker${scanResult.outsideWindow.length > 1 ? 's had' : ' had'} no expiration inside your ${effectiveFilter.minDTE}–${effectiveFilter.maxDTE} day window and used the nearest one instead: ${listSome(scanResult.outsideWindow)}.`);
+      }
+      if (scanResult.trendWarned.length > 0) {
+        notices.push(`${scanResult.trendWarned.length} CSP${scanResult.trendWarned.length > 1 ? 's were' : ' was'} scored down for bearish structure (flagged on the card): ${listSome(scanResult.trendWarned)}.`);
       }
       setScanNotice(notices.join(' '));
 

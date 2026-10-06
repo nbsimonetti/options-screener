@@ -1,4 +1,4 @@
-import type { OptionPosition, StrategyType, ChainFilter } from '../types';
+import type { OptionPosition, StrategyType, ChainFilter, PositionWarning } from '../types';
 import type { MDOption, MDQuote } from './marketdata';
 
 export function mdOptionToPosition(
@@ -84,18 +84,20 @@ export function filterMDChain(
     const mid = opt.mid || opt.last || 0;
     if (mid <= 0) return false;
 
-    // Hard liquidity floors (long-strategy research, applied to the short
-    // book too — a short position may need to be bought back under stress,
-    // and MID-fill results on wide markets overstate income returns):
-    //   bid ≥ $0.05, spread ≤ 15% of mid, OI ≥ 100, credit ≥ 3× spread.
+    // Liquidity: bid ≥ $0.05 and OI ≥ 100 always. Spread ≤ 15% of mid is
+    // clean; 15–50% passes only when the contract is cheap in dollars
+    // (spread ≤ $0.10) or deep (OI ≥ 1,000), matching the long screener —
+    // the idea carries a wide-spread warning (see spreadWarning) and the
+    // paper engine won't enter it. Over 50% of mid is never a real market.
     const bid = opt.bid || 0;
     const ask = opt.ask || 0;
     if (bid < 0.05) return false;
     const spread = ask - bid;
     if (spread < 0) return false;
-    if (mid > 0 && spread / mid > 0.15) return false;
     if ((opt.openInterest || 0) < 100) return false;
-    if (mid < 3 * spread) return false;
+    const spreadPct = spread / mid;
+    if (spreadPct > 0.50) return false;
+    if (spreadPct > 0.15 && !(spread <= 0.10 || (opt.openInterest || 0) >= 1000)) return false;
 
     return true;
   });
@@ -111,4 +113,16 @@ export function mdChainToPositions(
   medianIV?: number,
 ): OptionPosition[] {
   return chain.map((opt) => mdOptionToPosition(opt, quote, strategy, ivRank, earningsDate, atmIV, medianIV));
+}
+
+/** Warning for contracts admitted under the dollar-spread / open-interest exception. */
+export function spreadWarning(bid: number, ask: number): PositionWarning | null {
+  const mid = (bid + ask) / 2;
+  if (!(mid > 0)) return null;
+  const pct = (ask - bid) / mid;
+  if (pct <= 0.15) return null;
+  return {
+    code: 'wide-spread',
+    text: `Spread is ${(pct * 100).toFixed(0)}% of mid ($${(ask - bid).toFixed(2)}) — a real fill will land well below mid`,
+  };
 }

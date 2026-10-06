@@ -36,6 +36,11 @@ A market-cap floor (≥ $500M) was recommended but is not cleanly derivable from
 - **Shortlist (top 20 per direction):** ordered by within-bucket percentile; **SC names must be ≥ 90th percentile in their own bucket** to interleave (no forced cap quota — when small-cap momentum is broken, the list should show it); **max 3 per sector** (momentum shortlists are routinely 60%+ one sector at cycle peaks, which is one macro bet and one crash exposure).
 - The IV-quality factor is **excluded** from discovery scores (IVR is unknowable without spending options credits); it re-enters when the promoted ticker goes through the real Long scan.
 
+## 3b. Lists by tab
+
+- **Long tab:** a Bullish (calls) / Bearish (puts) toggle over the two directional shortlists above.
+- **Short tab:** CSP candidates — names in intact uptrends (above the 200-day SMA, no unreclaimed −4% gap-down on 2× volume in 60 sessions), ranked 60% on within-bucket 20-day realized-volatility percentile and 40% on the bullish composite, with the same shortlist rules (top 20, small caps ≥ 90th percentile, max 3 per sector). Realized volatility is the free stand-in for option richness; the options scan checks actual IV. The uptrend gate mirrors the short scanner's bearish-structure warning, so suggested names are ones it won't flag. _Bearish picks originally fed the Short tab, where they were the names its trend check penalizes._
+
 ## 4. Small-cap put-side guards (research brief §4) — computed in CI
 
 1. **Squeeze fingerprint** (short interest is unobservable in this stack): ≥ 5 days with close-to-close return ≥ +7% in the trailing 126 sessions → bear score × 0.55. Recurring violent up-days against a downtrend are the OHLCV signature of a crowded short.

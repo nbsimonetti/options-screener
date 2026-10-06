@@ -24,8 +24,11 @@ export interface DiscoveryRow {
   adv: number;           // 20d avg dollar volume, $M
   bull: number;          // bullish composite 0-100
   bear: number;          // bearish composite (0 = excluded by a guard)
+  csp?: number;          // CSP-candidate score: HV20 percentile + bullish composite, uptrend-gated (0 = not eligible)
+  hv?: number;           // 20-day realized vol, %
   bullP?: number;        // within-cap-bucket percentile
   bearP?: number;
+  cspP?: number;
   bf: [string, number][]; // bull factor [key, score] pairs (no ivq — unknown pre-options)
   sf: [string, number][];
   g: string[];           // small-cap put-side guards that fired
@@ -40,6 +43,7 @@ export interface DiscoveryData {
   stats: { poolSize: number; scored: number; lc: number; sc: number; failures: number };
   topLong: string[];
   topShort: string[];
+  topCsp?: string[];     // high-volatility names in uptrends (Short tab); absent before schema v4
   scored: DiscoveryRow[];
   topBars: Record<string, CompactBars>;
 }

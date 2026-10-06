@@ -45,7 +45,16 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
             {score.compositeScore.toFixed(0)}
           </span>
         </td>
-        <td className="px-2 py-2 font-semibold text-white">{p.ticker}</td>
+        <td className="px-2 py-2 font-semibold text-white">
+          <span className="inline-flex items-center gap-1">
+            {p.ticker}
+            {p.warnings && p.warnings.length > 0 && (
+              <span title={p.warnings.map((w) => w.text).join('\n')}>
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-400" aria-label="Has warnings" />
+              </span>
+            )}
+          </span>
+        </td>
         <td className="px-2 py-2 text-center">
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${p.strategy === 'CSP' ? 'bg-blue-900/50 text-blue-300' : 'bg-purple-900/50 text-purple-300'}`}>
             {p.strategy}
@@ -118,6 +127,19 @@ export default function IdeaCard({ idea, rank, expanded, onToggle, onAddToScreen
                 <div>
                   <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Key Metrics</h4>
                   <p className="text-xs text-slate-300 leading-relaxed">{thesis.keyMetrics}</p>
+                </div>
+              )}
+
+              {p.warnings && p.warnings.length > 0 && (
+                <div className="rounded border border-amber-700/50 bg-amber-900/20 p-2">
+                  <h4 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3" /> Warnings
+                  </h4>
+                  <ul className="space-y-0.5">
+                    {p.warnings.map((w) => (
+                      <li key={w.code} className="text-[11px] text-amber-200/90">{w.text}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 

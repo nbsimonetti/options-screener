@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const factorsUrl = pathToFileURL(join(here, '..', 'src', 'services', 'factors.ts')).href;
-const { computeBullish, computeBearish, detectEntryTrigger, atr14, sma } = await import(factorsUrl);
+const { computeBullish, computeBearish, detectEntryTrigger, atr14, sma, historicalVol } = await import(factorsUrl);
 
 const LIMIT = (() => {
   const i = process.argv.indexOf('--limit');
@@ -273,6 +273,22 @@ for (const ticker of tickers) {
       if (price < 15 || addv < 25e6) { bearScore = 0; guards.push('below put-side liquidity floor'); }
     }
 
+    // CSP-candidate eligibility (Short tab): intact uptrend — above the
+    // 200-day SMA with no unreclaimed −4% gap-down on 2× volume in 60
+    // sessions. Mirrors the short scanner's bearish-structure warning, so
+    // the names Discovery suggests for CSPs are the ones it won't flag.
+    const hv20 = historicalVol(bars.closes, 20);
+    let cspOk = price > sma(bars.closes, 200);
+    if (cspOk) {
+      for (let i = Math.max(1, n - 60); i < n; i++) {
+        const vol50 = sma(bars.volumes.slice(0, i), Math.min(50, i));
+        if (bars.opens[i] / bars.closes[i - 1] - 1 <= -0.04 && bars.volumes[i] >= 2 * vol50 && price < bars.closes[i - 1]) {
+          cspOk = false;
+          break;
+        }
+      }
+    }
+
     // IV-quality factor is neutral (IVR unknown without options credits) —
     // strip it from the shipped factor list to avoid implying knowledge.
     const packFactors = (r) => r.factors.filter((f) => f.key !== 'ivq').map((f) => [f.key, Math.round(f.score)]);
@@ -286,6 +302,8 @@ for (const ticker of tickers) {
       adv: Math.round(addv / 1e6), // $M
       bull: r2(bull.score),
       bear: r2(bearScore),
+      hv: Number.isFinite(hv20) ? Math.round(hv20) : 0, // 20d realized vol, %
+      cspOk,
       bf: packFactors(bull),
       sf: packFactors(bear),
       g: guards,
@@ -316,6 +334,17 @@ function pctRank(rows, key) {
 pctRank(scored, 'bull');
 pctRank(scored, 'bear');
 
+// CSP candidates: premium sellers want rich volatility on names in intact
+// uptrends. Without options data (no credits spent here), realized vol is
+// the volatility proxy: 60% within-bucket HV20 percentile + 40% bullish
+// composite, uptrend-gated. The options scan then checks actual IV.
+for (const cap of ['LC', 'SC']) {
+  const bucket = scored.filter((r) => r.cap === cap && r.cspOk).sort((a, b) => a.hv - b.hv);
+  bucket.forEach((r, i) => { r.hvP = Math.round((i / Math.max(1, bucket.length - 1)) * 100); });
+}
+for (const r of scored) r.csp = r.cspOk ? r2(0.6 * (r.hvP ?? 0) + 0.4 * r.bull) : 0;
+pctRank(scored, 'csp');
+
 // Shortlist (design doc §3): sort by within-bucket percentile then score; SC
 // needs ≥90th percentile in its own bucket to interleave; max 3 per sector;
 // N=20 per direction.
@@ -337,11 +366,12 @@ function shortlist(key) {
 }
 const topLong = shortlist('bull');
 const topShort = shortlist('bear');
+const topCsp = shortlist('csp');
 
 // Entry triggers + compact 300-bar OHLCV for shortlist members (lets the Long
 // scanner evaluate promoted tickers in production without the dev proxy).
 const topBars = {};
-for (const t of new Set([...topLong, ...topShort])) {
+for (const t of new Set([...topLong, ...topShort, ...topCsp])) {
   const bars = barsByTicker.get(t);
   if (!bars) continue;
   const row = scored.find((r) => r.t === t);
@@ -392,7 +422,7 @@ function firstSentence(text, maxLen = 280) {
 const yahooSession = await getYahooSession();
 if (!yahooSession) console.warn('No Yahoo crumb session — descriptions fall back to industry lines.');
 
-for (const t of new Set([...topLong, ...topShort])) {
+for (const t of new Set([...topLong, ...topShort, ...topCsp])) {
   const row = scored.find((r) => r.t === t);
   if (!row) continue;
   try {
@@ -430,7 +460,7 @@ for (const t of new Set([...topLong, ...topShort])) {
 }
 
 const artifact = {
-  version: 3, // bump forces refresh-discovery.mjs to regenerate instead of reusing
+  version: 4, // bump forces refresh-discovery.mjs to regenerate instead of reusing
   fetchedAt: new Date().toISOString(),
   stats: {
     poolSize: tickers.length,
@@ -441,6 +471,7 @@ const artifact = {
   },
   topLong,
   topShort,
+  topCsp,
   scored,
   topBars,
 };
