@@ -237,7 +237,7 @@ export async function getExpirations(ticker: string, token?: string): Promise<st
 export async function getOptionChain(
   ticker: string,
   token?: string,
-  params?: { dte?: number; side?: 'call' | 'put'; strikeLimit?: number; expiration?: string },
+  params?: { dte?: number; side?: 'call' | 'put'; strikeLimit?: number; expiration?: string; range?: 'itm' | 'otm' | 'all' },
 ): Promise<MDOption[]> {
   const upper = ticker.toUpperCase();
   const key = chainCacheKey(upper, params);
@@ -249,6 +249,7 @@ export async function getOptionChain(
   if (params?.side) qp.side = params.side;
   if (params?.strikeLimit) qp.strikeLimit = String(params.strikeLimit);
   if (params?.expiration) qp.expiration = params.expiration;
+  if (params?.range) qp.range = params.range;
 
   const data = await mdFetch<MDChainResponse>(`/options/chain/${upper}/`, qp, token);
   const chain = chainToRows(data);

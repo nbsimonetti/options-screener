@@ -76,6 +76,7 @@ export interface ChainCacheParams {
   side?: string;
   expiration?: string;
   strikeLimit?: number;
+  range?: string;
 }
 
 export function chainCacheKey(ticker: string, params?: ChainCacheParams): string {
@@ -84,6 +85,7 @@ export function chainCacheKey(ticker: string, params?: ChainCacheParams): string
   if (params?.side) parts.push(`side=${params.side}`);
   if (params?.expiration) parts.push(`exp=${params.expiration}`);
   if (params?.strikeLimit != null) parts.push(`lim=${params.strikeLimit}`);
+  if (params?.range) parts.push(`range=${params.range}`);
   return parts.join('|');
 }
 

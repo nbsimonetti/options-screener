@@ -78,6 +78,18 @@ function nearestOutsideWindow(expirations: string[], minDTE: number, maxDTE: num
 
 const TREND_PENALTY = 10;
 
+// Chain request shape shared by the fetch and the cache pre-check (keys must
+// match). range=otm: CSPs and CCs only ever use out-of-the-money strikes, and
+// a money-centered 20-strike request spent half its credits on ITM strikes
+// the filter discards — OTM-only reaches roughly twice as far (e.g. ~13% vs
+// ~28% below spot on AAPL) for the same 20 credits.
+const CHAIN_PARAMS = (expiration: string, side: 'put' | 'call') =>
+  ({ expiration, side, strikeLimit: 20, range: 'otm' as const });
+
+// CSP delta floor 0.05 (was 0.10): strikes 10–20% OTM on large caps often
+// sit at 0.03–0.09 delta, so a 0.10 floor emptied far-OTM CSP filters.
+const CSP_MIN_DELTA = 0.05;
+
 export async function scanForIdeas(
   universe: string[],
   weights: ScoringWeights,
@@ -150,8 +162,8 @@ export async function scanForIdeas(
       const selectedExps = pickExpirations(cachedExps, scanFilter.minDTE, scanFilter.maxDTE);
       if (selectedExps.length > 0) {
         allCached = selectedExps.every((exp) =>
-          hasChainCached(chainCacheKey(ticker, { expiration: exp, side: 'put', strikeLimit: 20 }))
-          && hasChainCached(chainCacheKey(ticker, { expiration: exp, side: 'call', strikeLimit: 20 }))
+          hasChainCached(chainCacheKey(ticker, CHAIN_PARAMS(exp, 'put')))
+          && hasChainCached(chainCacheKey(ticker, CHAIN_PARAMS(exp, 'call')))
         );
       }
     }
@@ -200,8 +212,8 @@ export async function scanForIdeas(
       // parallel. Failed fetches produce empty chains; successful ones
       // are processed normally.
       const fetchPromises = boundedExps.flatMap((exp) => [
-        getOptionChain(ticker, marketDataToken, { expiration: exp, side: 'put', strikeLimit: 20 }),
-        getOptionChain(ticker, marketDataToken, { expiration: exp, side: 'call', strikeLimit: 20 }),
+        getOptionChain(ticker, marketDataToken, CHAIN_PARAMS(exp, 'put')),
+        getOptionChain(ticker, marketDataToken, CHAIN_PARAMS(exp, 'call')),
       ]);
       const settled = await Promise.allSettled(fetchPromises);
       const results: MDOption[][] = settled.map((s) => s.status === 'fulfilled' ? s.value : []);
@@ -271,7 +283,7 @@ export async function scanForIdeas(
         if (puts.length === 0 && calls.length === 0) continue;
 
         const cspFiltered = filterMDChain(puts, quote, {
-          strategy: 'CSP', minDelta: 0.10, maxDelta: 0.40,
+          strategy: 'CSP', minDelta: CSP_MIN_DELTA, maxDelta: 0.40,
           minDTE: dteMin, maxDTE: dteMax,
           minOTMPct: scanFilter.minOTMPct, maxOTMPct: scanFilter.maxOTMPct,
         });

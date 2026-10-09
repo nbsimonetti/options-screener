@@ -39,7 +39,7 @@ A market-cap floor (≥ $500M) was recommended but is not cleanly derivable from
 ## 3b. Lists by tab
 
 - **Long tab:** a Bullish (calls) / Bearish (puts) toggle over the two directional shortlists above.
-- **Short tab:** CSP candidates — names in intact uptrends (above the 200-day SMA, no unreclaimed −4% gap-down on 2× volume in 60 sessions), ranked 60% on within-bucket 20-day realized-volatility percentile and 40% on the bullish composite, with the same shortlist rules (top 20, small caps ≥ 90th percentile, max 3 per sector). Realized volatility is the free stand-in for option richness; the options scan checks actual IV. The uptrend gate mirrors the short scanner's bearish-structure warning, so suggested names are ones it won't flag. _Bearish picks originally fed the Short tab, where they were the names its trend check penalizes._
+- **Short tab:** CSP candidates — names in intact uptrends (above the 200-day SMA, no unreclaimed −4% gap-down on 2× volume in 60 sessions), ranked 60% on within-bucket 20-day realized-volatility percentile and 40% on the bullish composite, with a wider shortlist than the directional lists: up to 50 names, small caps from the 75th percentile of their bucket, max 6 per sector. (The directional lists stay at 20 / 90th / 3 because they feed the credit-spending Long scanner.) Realized volatility is the free stand-in for option richness; the options scan checks actual IV. The uptrend gate mirrors the short scanner's bearish-structure warning, so suggested names are ones it won't flag. _Bearish picks originally fed the Short tab, where they were the names its trend check penalizes._
 
 ## 4. Small-cap put-side guards (research brief §4) — computed in CI
 

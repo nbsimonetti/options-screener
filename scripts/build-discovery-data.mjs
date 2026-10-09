@@ -348,17 +348,21 @@ pctRank(scored, 'csp');
 // Shortlist (design doc §3): sort by within-bucket percentile then score; SC
 // needs ≥90th percentile in its own bucket to interleave; max 3 per sector;
 // N=20 per direction.
-function shortlist(key) {
+// Directional lists (bull/bear) stay tight: they feed the Long scanner, which
+// spends credits per name. The CSP list is wider — premium sellers want a
+// broad bench of uptrending, volatile names to choose from, and the uptrend
+// gate already does the quality filtering.
+function shortlist(key, { size = 20, perSectorMax = 3, scMinPct = 90 } = {}) {
   const ordered = [...scored]
     .filter((r) => r[key] > 0)
-    .filter((r) => r.cap === 'LC' || r[key + 'P'] >= 90)
+    .filter((r) => r.cap === 'LC' || r[key + 'P'] >= scMinPct)
     .sort((a, b) => b[key + 'P'] - a[key + 'P'] || b[key] - a[key]);
   const out = [];
   const perSector = {};
   for (const r of ordered) {
-    if (out.length >= 20) break;
+    if (out.length >= size) break;
     const s = r.sec || 'Unknown';
-    if ((perSector[s] ?? 0) >= 3) continue;
+    if ((perSector[s] ?? 0) >= perSectorMax) continue;
     perSector[s] = (perSector[s] ?? 0) + 1;
     out.push(r.t);
   }
@@ -366,12 +370,14 @@ function shortlist(key) {
 }
 const topLong = shortlist('bull');
 const topShort = shortlist('bear');
-const topCsp = shortlist('csp');
+const topCsp = shortlist('csp', { size: 50, perSectorMax: 6, scMinPct: 75 });
 
-// Entry triggers + compact 300-bar OHLCV for shortlist members (lets the Long
-// scanner evaluate promoted tickers in production without the dev proxy).
+// Entry triggers + compact 300-bar OHLCV for the directional shortlists (lets
+// the Long scanner evaluate promoted tickers in production without the dev
+// proxy). CSP names are excluded: they're promoted to the Short tab, whose
+// scanner doesn't need bars, and they're uptrend-gated already.
 const topBars = {};
-for (const t of new Set([...topLong, ...topShort, ...topCsp])) {
+for (const t of new Set([...topLong, ...topShort])) {
   const bars = barsByTicker.get(t);
   if (!bars) continue;
   const row = scored.find((r) => r.t === t);
@@ -460,7 +466,7 @@ for (const t of new Set([...topLong, ...topShort, ...topCsp])) {
 }
 
 const artifact = {
-  version: 4, // bump forces refresh-discovery.mjs to regenerate instead of reusing
+  version: 5, // bump forces refresh-discovery.mjs to regenerate instead of reusing
   fetchedAt: new Date().toISOString(),
   stats: {
     poolSize: tickers.length,

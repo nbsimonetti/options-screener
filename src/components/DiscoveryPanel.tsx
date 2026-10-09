@@ -137,12 +137,13 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
                     : 'No candidates cleared the discovery funnel today.'}
                 </p>
               ) : (
+                <div className="max-h-[560px] overflow-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-slate-800 border-b border-slate-700 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
+                  <thead className="sticky top-0 z-10 bg-slate-800 border-b border-slate-700 text-[10px] font-medium text-slate-500 uppercase tracking-wider">
                     <tr>
                       <th className="px-3 py-1.5 text-left">#</th>
                       <th className="px-2 py-1.5 text-left">Ticker</th>
-                      <th className="px-2 py-1.5 text-center" title="LC = S&P 500 / Nasdaq-100 · SC = Russell 2000 (small caps rank in their own percentile bucket and must clear the 90th percentile to appear)">Cap</th>
+                      <th className="px-2 py-1.5 text-center" title={`LC = S&P 500 / Nasdaq-100 · SC = Russell 2000 (small caps rank in their own percentile bucket and must clear the ${list === 'csp' ? '75th' : '90th'} percentile to appear)`}>Cap</th>
                       <th className="px-2 py-1.5 text-left">Sector</th>
                       <th className="px-2 py-1.5 text-right">Price</th>
                       <th className="px-2 py-1.5 text-right" title="20d average dollar volume">ADV</th>
@@ -177,13 +178,16 @@ export default function DiscoveryPanel({ direction, onUniverseChange, targetLabe
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
 
               <p className="px-4 py-2 text-[10px] text-slate-600 border-t border-slate-700/60">
                 Scored daily in CI with the same factor engine, zero API credits. Promoting adds the ticker to whatever this
                 tab scans — the active saved watchlist if one is selected, otherwise the default list; the next Long/Short scan evaluates its options chain (~14–125 credits per ticker). Shortlist
-                rules: within-bucket percentile ranking, small caps need ≥ 90th percentile, max 3 per sector, put-side
-                small caps face squeeze/exhaustion/liquidity guards.
+                rules: within-bucket percentile ranking;{' '}
+                {list === 'csp'
+                  ? 'up to 50 names in uptrends, small caps from the 75th percentile, max 6 per sector.'
+                  : 'top 20, small caps need ≥ 90th percentile, max 3 per sector; put-side small caps face squeeze/exhaustion/liquidity guards.'}
               </p>
             </>
           )}
